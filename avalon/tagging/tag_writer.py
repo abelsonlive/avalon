@@ -13,17 +13,27 @@ generated.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from pathlib import Path
 
 from mutagen.aiff import AIFF
 from mutagen.flac import FLAC
-from mutagen.id3 import COMM, TBPM, TCON, TKEY, TXXX
+from mutagen.id3 import COMM, TBPM, TCON, TDRC, TDRL, TKEY, TPUB, TSRC, TXXX, UFID
 from mutagen.mp3 import MP3
 from mutagen.mp4 import MP4
 from mutagen.wave import WAVE
 
-from avalon.constants import EXTENSION_TO_FORMAT, ID3_FAMILY, TAG_FRAME_MAPS, FileFormat
+from avalon.constants import (
+    EXTENSION_TO_FORMAT,
+    FLAC_RELEASE_DATE_FIELD,
+    ID3_FAMILY,
+    IDENTITY_FIELD_MAPS,
+    MB_RECORDING_UFID_OWNER,
+    TAG_FRAME_MAPS,
+    FileFormat,
+    IdentityFieldMap,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +83,6 @@ def save(audio) -> None:
     audio.save()
 
 
-# ---- reading canonical fields (never written back verbatim by avalon) ----
-
-
 def read_canonical(audio, file_format: FileFormat) -> dict[str, str]:
     if file_format in ID3_FAMILY:
         return _read_id3_canonical(audio)
@@ -85,9 +92,7 @@ def read_canonical(audio, file_format: FileFormat) -> dict[str, str]:
 
 
 def _read_id3_canonical(audio) -> dict[str, str]:
-    frames = TAG_FRAME_MAPS[
-        FileFormat.MP3
-    ]  # frame names identical across the ID3 family
+    frames = TAG_FRAME_MAPS[FileFormat.MP3]
     result = {}
     for field in CANONICAL_READ_FIELDS:
         frame_id = getattr(frames, field)
@@ -124,9 +129,6 @@ def _read_mp4_canonical(audio) -> dict[str, str]:
     return result
 
 
-# ---- writing avalon-generated canonical fields (genre, bpm, key) ----
-
-
 def write_generated_fields(
     audio,
     file_format: FileFormat,
@@ -134,16 +136,15 @@ def write_generated_fields(
     bpm: str | None,
     key: str | None,
     genre: str | None,
+    date: str | None = None,
     fill_only_if_missing: bool,
 ) -> None:
     existing = read_canonical(audio, file_format)
     to_write = {}
-    for field, value in (("bpm", bpm), ("key", key), ("genre", genre)):
+    for field, value in (("bpm", bpm), ("key", key), ("genre", genre), ("date", date)):
         if value is None:
             continue
         existing_value = existing.get(field)
-        # "0" is a common sentinel for "no BPM tagged" -- treat it as absent
-        # rather than as a real value blocking fill-only-if-missing.
         if field == "bpm" and existing_value == "0":
             existing_value = None
         if fill_only_if_missing and existing_value:
@@ -167,6 +168,8 @@ def _write_id3_generated(audio, values: dict[str, str]) -> None:
         audio.tags.add(TKEY(encoding=3, text=values["key"]))
     if "genre" in values:
         audio.tags.add(TCON(encoding=3, text=values["genre"]))
+    if "date" in values:
+        audio.tags.add(TDRC(encoding=3, text=values["date"]))
 
 
 def _write_flac_generated(audio, values: dict[str, str]) -> None:
@@ -177,6 +180,8 @@ def _write_flac_generated(audio, values: dict[str, str]) -> None:
         audio.tags[frames.key] = [values["key"]]
     if "genre" in values:
         audio.tags[frames.genre] = [values["genre"]]
+    if "date" in values:
+        audio.tags[frames.date] = [values["date"]]
 
 
 def _write_mp4_generated(audio, values: dict[str, str]) -> None:
@@ -187,9 +192,31 @@ def _write_mp4_generated(audio, values: dict[str, str]) -> None:
         audio.tags[frames.key] = values["key"].encode("utf-8")
     if "genre" in values:
         audio.tags[frames.genre] = [values["genre"]]
+    if "date" in values:
+        audio.tags[frames.date] = [values["date"]]
 
 
-# ---- headline + extended analysis tags ----
+def write_release_date(
+    audio, file_format: FileFormat, value: str | None, *, fill_only_if_missing: bool
+) -> None:
+    """Navidrome's persistent-ID scheme (and TagLib's own tag mapping) treat
+    "release date" -- ID3's TDRL frame / a literal `releasedate` Vorbis
+    field -- as distinct from the generic recording date `write_generated_
+    fields`'s `date` param already covers (TDRC/DATE). MP4 has no such
+    distinction (`©day` already serves both via the existing `date` write),
+    so this is a no-op there."""
+    if value is None or file_format is FileFormat.MP4:
+        return
+    if file_format in ID3_FAMILY:
+        existing = audio.tags.get("TDRL")
+        if fill_only_if_missing and existing and existing.text:
+            return
+        audio.tags.add(TDRL(encoding=3, text=value))
+    elif file_format is FileFormat.FLAC:
+        existing = audio.tags.get(FLAC_RELEASE_DATE_FIELD) if audio.tags else None
+        if fill_only_if_missing and existing:
+            return
+        audio.tags[FLAC_RELEASE_DATE_FIELD] = [value]
 
 
 def _headline_frame_id(file_format: FileFormat, tag_name: str) -> str:
@@ -213,8 +240,6 @@ def read_headline(
     frame_id = _headline_frame_id(file_format, tag_name or frames.headline)
     if file_format in ID3_FAMILY:
         if frame_id == "COMM":
-            # COMM frames are keyed by (desc, lang), e.g. "COMM::eng" -- not
-            # the plain "COMM" this maps to, so a direct .get() would miss.
             comments = audio.tags.getall("COMM")
             return str(comments[0].text[0]) if comments and comments[0].text else None
         frame = audio.tags.get(frame_id)
@@ -250,24 +275,95 @@ def write_headline(
         audio.tags[frame_id] = [value]
 
 
-def read_extended(audio, file_format: FileFormat) -> str | None:
-    frames = TAG_FRAME_MAPS[file_format]
+def _read_tag_value(audio, file_format: FileFormat, frame_id: str) -> str | None:
+    """One string value at one frame/field/atom id. Shared by the extended
+    and identity blob tags and the generic (non-ID3-native) identity
+    fields below -- all boil down to the same "one value per format" shape,
+    differing only in which id they live at."""
     if file_format in ID3_FAMILY:
-        frame = audio.tags.get(frames.extended)
+        frame = audio.tags.get(frame_id)
         return str(frame.text[0]) if frame and frame.text else None
     if file_format is FileFormat.FLAC:
-        values = audio.tags.get(frames.extended) if audio.tags else None
+        values = audio.tags.get(frame_id) if audio.tags else None
         return str(values[0]) if values else None
-    values = audio.tags.get(frames.extended) if audio.tags else None
+    values = audio.tags.get(frame_id) if audio.tags else None
     return values[0].decode("utf-8") if values else None
 
 
-def write_extended(audio, file_format: FileFormat, value: str) -> None:
-    frames = TAG_FRAME_MAPS[file_format]
+def _write_tag_value(audio, file_format: FileFormat, frame_id: str, value: str) -> None:
     if file_format in ID3_FAMILY:
-        _, _, description = frames.extended.partition(":")
+        _, _, description = frame_id.partition(":")
         audio.tags.add(TXXX(encoding=3, desc=description, text=value))
     elif file_format is FileFormat.FLAC:
-        audio.tags[frames.extended] = [value]
+        audio.tags[frame_id] = [value]
     else:
-        audio.tags[frames.extended] = value.encode("utf-8")
+        audio.tags[frame_id] = value.encode("utf-8")
+
+
+def read_extended(audio, file_format: FileFormat) -> str | None:
+    return _read_tag_value(audio, file_format, TAG_FRAME_MAPS[file_format].extended)
+
+
+def write_extended(audio, file_format: FileFormat, value: str) -> None:
+    _write_tag_value(audio, file_format, TAG_FRAME_MAPS[file_format].extended, value)
+
+
+def read_identity_extended(audio, file_format: FileFormat) -> str | None:
+    return _read_tag_value(audio, file_format, TAG_FRAME_MAPS[file_format].identity)
+
+
+def write_identity_extended(audio, file_format: FileFormat, value: str) -> None:
+    _write_tag_value(audio, file_format, TAG_FRAME_MAPS[file_format].identity, value)
+
+
+IDENTITY_FIELD_NAMES = tuple(f.name for f in dataclasses.fields(IdentityFieldMap))
+_ID3_NATIVE_IDENTITY_FIELDS = {"musicbrainz_recording_id", "isrc", "label"}
+
+
+def read_identity_fields(audio, file_format: FileFormat) -> dict[str, str]:
+    field_map = IDENTITY_FIELD_MAPS[file_format]
+    result: dict[str, str] = {}
+    fields = IDENTITY_FIELD_NAMES
+    if file_format in ID3_FAMILY:
+        ufid = audio.tags.get(f"UFID:{MB_RECORDING_UFID_OWNER}")
+        if ufid is not None and ufid.data:
+            result["musicbrainz_recording_id"] = ufid.data.decode("ascii")
+        for field, frame_id in (("isrc", "TSRC"), ("label", "TPUB")):
+            frame = audio.tags.get(frame_id)
+            if frame is not None and frame.text:
+                result[field] = str(frame.text[0])
+        fields = tuple(f for f in fields if f not in _ID3_NATIVE_IDENTITY_FIELDS)
+    for field in fields:
+        value = _read_tag_value(audio, file_format, getattr(field_map, field))
+        if value is not None:
+            result[field] = value
+    return result
+
+
+def write_identity_fields(
+    audio, file_format: FileFormat, values: dict[str, str]
+) -> None:
+    """`values` keys are any subset of `IDENTITY_FIELD_NAMES`; the caller
+    (pipeline.py) is responsible for fill-only-if-missing filtering, same
+    as `write_generated_fields`'s own caller -- this just writes whatever
+    it's handed."""
+    field_map = IDENTITY_FIELD_MAPS[file_format]
+    fields = IDENTITY_FIELD_NAMES
+    if file_format in ID3_FAMILY:
+        if "musicbrainz_recording_id" in values:
+            audio.tags.add(
+                UFID(
+                    owner=MB_RECORDING_UFID_OWNER,
+                    data=values["musicbrainz_recording_id"].encode("ascii"),
+                )
+            )
+        if "isrc" in values:
+            audio.tags.add(TSRC(encoding=3, text=values["isrc"]))
+        if "label" in values:
+            audio.tags.add(TPUB(encoding=3, text=values["label"]))
+        fields = tuple(f for f in fields if f not in _ID3_NATIVE_IDENTITY_FIELDS)
+    for field in fields:
+        if field in values:
+            _write_tag_value(
+                audio, file_format, getattr(field_map, field), values[field]
+            )

@@ -50,9 +50,7 @@ class TestHeadline:
         result = analysis_blob.encode_headline(analysis, existing=None)
         parsed = analysis_blob.parse_headline(result)
         assert parsed["key"] == "F#m"
-        assert (
-            "camelot" not in parsed
-        )  # nothing to report when essentia's key/scale has no mapping
+        assert "camelot" not in parsed
 
     def test_merges_into_existing_generated_style_tag(self):
         existing = "bpm:120;key:Am;mynote:keep-me"
@@ -61,7 +59,7 @@ class TestHeadline:
         assert parsed["bpm"] == "128"
         assert parsed["key"] == "Am"
         assert parsed["camelot"] == "8A"
-        assert parsed["mynote"] == "keep-me"  # untouched, not clobbered
+        assert parsed["mynote"] == "keep-me"
 
     def test_preserves_freeform_comment_instead_of_clobbering(self):
         existing = "great track for warmup sets, played at Fabric 2019"
@@ -70,7 +68,6 @@ class TestHeadline:
         assert "bpm:128" in result
 
     def test_force_replace_via_existing_none(self):
-        # Simulates --overwrite-description: caller passes existing=None.
         existing_but_ignored = "bpm:999;key:1A"
         result = analysis_blob.encode_headline(_sample_analysis(), existing=None)
         assert "999" not in result

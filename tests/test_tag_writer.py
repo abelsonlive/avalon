@@ -67,7 +67,7 @@ class TestReadWriteRoundTrip:
         tag_writer.save(audio)
 
         after = tag_writer.read_canonical(tag_writer.load(fixture_path, fmt), fmt)
-        for field in ("genre",):  # every fixture has a pre-existing genre tag
+        for field in ("genre",):
             if before.get(field):
                 assert after[field] == before[field]
 
@@ -109,9 +109,6 @@ class TestHeadlineTagOverride:
             tag_writer.read_headline(reloaded, fmt, "AVALON_HEADLINE")
             == "bpm:128;key:8A"
         )
-        # Native slot never written by this test -- some fixtures ship with
-        # a pre-existing but empty native field, hence falsy rather than
-        # strictly None.
         assert not tag_writer.read_headline(reloaded, fmt)
 
     def test_explicit_native_name_behaves_like_the_default(self, fixture_path):
@@ -125,10 +122,176 @@ class TestHeadlineTagOverride:
         assert tag_writer.read_headline(reloaded, fmt) == "bpm:128;key:8A"
 
 
+class TestGeneratedDateField:
+    def test_date_fills_when_missing(self, tmp_path):
+        import ffmpeg
+
+        path = str(tmp_path / "fresh.wav")
+        ffmpeg.output(
+            ffmpeg.input(str(FIXTURES / "test.mp3")), path, t=1, loglevel="error"
+        ).run(overwrite_output=True)
+        fmt = tag_writer.detect_format(path)
+        audio = tag_writer.load(path, fmt)
+        assert tag_writer.read_canonical(audio, fmt).get("date") is None
+
+        tag_writer.write_generated_fields(
+            audio,
+            fmt,
+            bpm=None,
+            key=None,
+            genre=None,
+            date="1991-09-24",
+            fill_only_if_missing=True,
+        )
+        tag_writer.save(audio)
+
+        after = tag_writer.read_canonical(tag_writer.load(path, fmt), fmt)
+        assert after["date"] == "1991-09-24"
+
+    def test_date_does_not_overwrite_existing(self, fixture_path):
+        fmt = tag_writer.detect_format(fixture_path)
+        audio = tag_writer.load(fixture_path, fmt)
+        before = tag_writer.read_canonical(audio, fmt).get("date")
+        if not before:
+            pytest.skip("fixture has no pre-existing date to protect")
+
+        tag_writer.write_generated_fields(
+            audio,
+            fmt,
+            bpm=None,
+            key=None,
+            genre=None,
+            date="1900-01-01",
+            fill_only_if_missing=True,
+        )
+        tag_writer.save(audio)
+
+        after = tag_writer.read_canonical(tag_writer.load(fixture_path, fmt), fmt)
+        assert after["date"] == before
+
+
+class TestReleaseDate:
+    """TDRL (ID3) / a literal `releasedate` Vorbis field -- distinct from
+    the generic TDRC/DATE `date` field -- so Navidrome's album-PID fallback
+    (which specifically wants `releasedate`) is satisfied too, not just the
+    primary MBID-based path."""
+
+    def test_id3_family_writes_tdrl(self, fixture_path):
+        fmt = tag_writer.detect_format(fixture_path)
+        if fmt.value not in ("mp3", "aiff"):
+            pytest.skip("TDRL is ID3-specific")
+        audio = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_release_date(
+            audio, fmt, "1991-09-24", fill_only_if_missing=False
+        )
+        tag_writer.save(audio)
+
+        reloaded = tag_writer.load(fixture_path, fmt)
+        frame = reloaded.tags.get("TDRL")
+        assert frame is not None and str(frame.text[0]) == "1991-09-24"
+
+    def test_flac_writes_dedicated_releasedate_field(self, fixture_path):
+        fmt = tag_writer.detect_format(fixture_path)
+        if fmt.value != "flac":
+            pytest.skip("Vorbis-specific")
+        audio = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_release_date(
+            audio, fmt, "1991-09-24", fill_only_if_missing=True
+        )
+        tag_writer.save(audio)
+
+        reloaded = tag_writer.load(fixture_path, fmt)
+        assert reloaded.tags["RELEASEDATE"] == ["1991-09-24"]
+        assert (
+            reloaded.tags.get("DATE") != ["1991-09-24"] or "DATE" not in reloaded.tags
+        )
+
+    def test_mp4_is_a_no_op(self, fixture_path):
+        fmt = tag_writer.detect_format(fixture_path)
+        if fmt.value != "mp4":
+            pytest.skip("MP4-specific")
+        audio = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_release_date(
+            audio, fmt, "1991-09-24", fill_only_if_missing=True
+        )
+        assert "RELEASEDATE" not in audio.tags
+
+    def test_fill_only_if_missing_respected(self, fixture_path):
+        fmt = tag_writer.detect_format(fixture_path)
+        if fmt.value == "mp4":
+            pytest.skip("no-op for MP4")
+        audio = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_release_date(
+            audio, fmt, "1991-09-24", fill_only_if_missing=False
+        )
+        tag_writer.save(audio)
+
+        reloaded = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_release_date(
+            reloaded, fmt, "2000-01-01", fill_only_if_missing=True
+        )
+        tag_writer.save(reloaded)
+
+        final = tag_writer.load(fixture_path, fmt)
+        if fmt.value == "flac":
+            assert final.tags["RELEASEDATE"] == ["1991-09-24"]
+        else:
+            assert str(final.tags["TDRL"].text[0]) == "1991-09-24"
+
+
+class TestIdentityFields:
+    """The 9 Picard-interop MB/Discogs/AcoustID fields -- 3 of which
+    (musicbrainz_recording_id/isrc/label) use native ID3 frames (UFID/TSRC/
+    TPUB) rather than TXXX, confirmed against Picard's own convention."""
+
+    _VALUES = {
+        "musicbrainz_recording_id": "5fb524f1-8cc8-4c04-a921-e34c0a911ea7",
+        "musicbrainz_release_id": "f922ec87-4758-421d-a839-3193455345ff",
+        "musicbrainz_artist_id": "5b11f4ce-a62d-471e-81fc-a69a8278c7da",
+        "discogs_release_id": "10817694",
+        "acoustid_id": "aaaaaaaa-0000-0000-0000-000000000000",
+        "isrc": "USGF19942501",
+        "label": "DGC Records",
+        "catalog_number": "DGC-24425",
+        "release_country": "US",
+    }
+
+    def test_round_trip(self, fixture_path):
+        fmt = tag_writer.detect_format(fixture_path)
+        audio = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_identity_fields(audio, fmt, self._VALUES)
+        tag_writer.save(audio)
+
+        reloaded = tag_writer.load(fixture_path, fmt)
+        assert tag_writer.read_identity_fields(reloaded, fmt) == self._VALUES
+
+    def test_extended_blob_round_trip(self, fixture_path):
+        fmt = tag_writer.detect_format(fixture_path)
+        audio = tag_writer.load(fixture_path, fmt)
+        blob = "iv=1;mb_recording=rec-1;conf=0.9300"
+        tag_writer.write_identity_extended(audio, fmt, blob)
+        tag_writer.save(audio)
+
+        reloaded = tag_writer.load(fixture_path, fmt)
+        assert tag_writer.read_identity_extended(reloaded, fmt) == blob
+
+    def test_does_not_collide_with_analysis_extended_tag(self, fixture_path):
+        fmt = tag_writer.detect_format(fixture_path)
+        audio = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_extended(audio, fmt, "av=1;bpm=128.0")
+        tag_writer.write_identity_extended(audio, fmt, "iv=1;mb_recording=rec-1")
+        tag_writer.save(audio)
+
+        reloaded = tag_writer.load(fixture_path, fmt)
+        assert tag_writer.read_extended(reloaded, fmt) == "av=1;bpm=128.0"
+        assert (
+            tag_writer.read_identity_extended(reloaded, fmt)
+            == "iv=1;mb_recording=rec-1"
+        )
+
+
 class TestBpmZeroSentinel:
     def test_bpm_zero_is_treated_as_missing(self, tmp_path):
-        # test.flac ships with an existing BPM field set to "0" -- a common
-        # tagger sentinel for "no BPM data", not a real value to preserve.
         path = _copy_fixture("test.flac", tmp_path)
         fmt = tag_writer.detect_format(path)
         audio = tag_writer.load(path, fmt)

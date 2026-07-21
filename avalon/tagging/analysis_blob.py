@@ -32,9 +32,6 @@ def standard_key(analysis: TrackAnalysis) -> str:
     return f"{analysis.key}{suffix}"
 
 
-# Every field selectable via --headline-format, and how to render it from a
-# TrackAnalysis. Kept to scalar/short values -- this tag is meant to stay
-# compact and human-scannable; the full roster lives in the extended tag.
 HEADLINE_FIELD_VALUES: dict[str, Callable[[TrackAnalysis], str]] = {
     "bpm": lambda a: str(round(a.bpm)),
     "key": standard_key,

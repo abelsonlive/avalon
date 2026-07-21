@@ -102,9 +102,7 @@ def watch(
                     continue
                 if not _is_stable(path):
                     with lock:
-                        pending[path] = (
-                            time.time()
-                        )  # still changing -- recheck next cycle
+                        pending[path] = time.time()
                     continue
                 try:
                     on_file_ready(path)

@@ -25,8 +25,6 @@ _PCM_CODEC_BY_BIT_DEPTH = {
 }
 _PCM_CONTAINER_FORMATS = {"aiff", "wav"}
 
-# Codec, not container: M4A can hold either lossy AAC or lossless ALAC, so
-# the file extension alone can't tell you which.
 _LOSSLESS_CODECS = {
     "flac",
     "alac",
@@ -93,6 +91,8 @@ def needs_conversion(
     codec check, not an extension check -- M4A can hold either lossy AAC
     or lossless ALAC.
     """
+    if target_format is None and max_sample_rate is None and max_bit_depth is None:
+        return False
     info = probe(path)
     if not is_lossless(info["codec_name"]):
         return False

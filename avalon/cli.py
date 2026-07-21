@@ -24,16 +24,14 @@ import sys
 from pathlib import Path
 
 from avalon.constants import AUDIO_EXTENSIONS
+from avalon.identity import credentials as identity_credentials
 from avalon.pathing import DEFAULT_TEMPLATE
 from avalon.pipeline import Pipeline, PipelineOptions
-from avalon.tagging import analysis_blob, tag_writer
+from avalon.tagging import analysis_blob, identity_blob, tag_writer
 from avalon import state as state_module
 from avalon import watcher
 
 logger = logging.getLogger(__name__)
-
-
-# -------- Argument parsing --------
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -98,6 +96,13 @@ def _headline_fields_type(raw: str) -> tuple[str, ...]:
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
+def _min_confidence_type(raw: str) -> float:
+    try:
+        return identity_credentials.parse_min_confidence(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def _add_pipeline_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dest", type=str, default=None, help="Destination root; omit to tag in place"
@@ -148,6 +153,24 @@ def _add_pipeline_flags(parser: argparse.ArgumentParser) -> None:
         f"(default: {','.join(analysis_blob.DEFAULT_HEADLINE_FIELDS)})",
     )
     parser.add_argument(
+        "--identify",
+        action="store_true",
+        help="Reconcile against MusicBrainz/Discogs (fingerprint via AcoustID). Off by "
+        "default -- requires the ACOUSTID_API_KEY and/or DISCOGS_TOKEN environment "
+        "variable(s); errors if --identify is passed but neither is set",
+    )
+    parser.add_argument(
+        "--force-reidentify",
+        action="store_true",
+        help="Re-run --identify even if already current",
+    )
+    parser.add_argument(
+        "--min-identify-confidence",
+        type=_min_confidence_type,
+        default=0.7,
+        help="Minimum AcoustID match score (0-1) to trust a fingerprint match (default: 0.7)",
+    )
+    parser.add_argument(
         "--delete-original",
         action="store_true",
         help="Delete the source file after successful processing",
@@ -167,9 +190,18 @@ def setup_logging(debug: bool, verbose: bool) -> None:
     logging.basicConfig(
         level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
+    # urllib3 logs full request lines (incl. query params) at DEBUG -- the
+    # Discogs client authenticates via a `token=` query param, so --debug
+    # must never drop this logger's floor below INFO or it leaks credentials.
+    logging.getLogger("urllib3").setLevel(logging.INFO)
 
 
-# -------- File discovery --------
+def _is_audio_file(path: Path) -> bool:
+    """Excludes macOS AppleDouble sidecar files (`._track.mp3`), which SMB/
+    NFS/FAT shares cause macOS to create for extended attributes a native
+    filesystem would store inline -- these carry no real audio but would
+    otherwise pass the plain extension check."""
+    return path.suffix.lower() in AUDIO_EXTENSIONS and not path.name.startswith("._")
 
 
 def gather_files(sources: list[str], recursive: bool) -> list[Path]:
@@ -177,16 +209,14 @@ def gather_files(sources: list[str], recursive: bool) -> list[Path]:
     for source in sources:
         path = Path(source)
         if path.is_file():
-            if path.suffix.lower() in AUDIO_EXTENSIONS:
+            if _is_audio_file(path):
                 files.append(path)
             continue
         if not path.is_dir():
             logger.warning("Source not found: %s", path)
             continue
         walker = path.rglob("*") if recursive else path.glob("*")
-        files.extend(
-            p for p in walker if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
-        )
+        files.extend(p for p in walker if p.is_file() and _is_audio_file(p))
     return sorted(files)
 
 
@@ -212,15 +242,33 @@ def _pipeline_options_from_args(args: argparse.Namespace) -> PipelineOptions:
         overwrite_description=args.overwrite_description,
         headline_tag=args.headline_tag,
         headline_fields=args.headline_format,
+        do_identify=args.identify,
+        force_reidentify=args.force_reidentify,
+        min_identify_confidence=args.min_identify_confidence,
         delete_original=args.delete_original,
         dry_run=getattr(args, "dry_run", False),
     )
 
 
-# -------- analyze --------
+def _check_identify_credentials(args: argparse.Namespace) -> int | None:
+    """Returns an exit code if --identify was requested without the
+    required credentials configured, else None to tell the caller to
+    proceed. Shared by run_analyze/run_watch so this is checked once,
+    before either mode's per-file loop starts."""
+    if not args.identify:
+        return None
+    try:
+        identity_credentials.ensure_configured()
+    except identity_credentials.MissingCredentialsError as exc:
+        logger.error(str(exc))
+        return 1
+    return None
 
 
 def run_analyze(args: argparse.Namespace) -> int:
+    if (exit_code := _check_identify_credentials(args)) is not None:
+        return exit_code
+
     files = gather_files(args.sources, args.recursive)
     if not files:
         logger.warning("No audio files found")
@@ -232,10 +280,14 @@ def run_analyze(args: argparse.Namespace) -> int:
     dest_root = options.dest_root or _default_state_dir(args.sources[0])
     state = state_module.load(dest_root)
 
+    skip_fast_path = (
+        args.dry_run or args.identify or args.force_reanalyze or args.force_reidentify
+    )
+
     failures: list[tuple[Path, str]] = []
     processed = 0
     for path in files:
-        if not args.dry_run and state_module.is_unchanged(state, path):
+        if not skip_fast_path and state_module.is_unchanged(state, path):
             logger.debug("Unchanged, skipping: %s", path)
             continue
         result = pipeline.process_file(path)
@@ -260,10 +312,10 @@ def run_analyze(args: argparse.Namespace) -> int:
     return 0 if not failures else 2
 
 
-# -------- watch --------
-
-
 def run_watch(args: argparse.Namespace) -> int:
+    if (exit_code := _check_identify_credentials(args)) is not None:
+        return exit_code
+
     source_roots = [Path(s).resolve() for s in args.sources]
     missing = [s for s in source_roots if not s.is_dir()]
     if missing:
@@ -276,8 +328,10 @@ def run_watch(args: argparse.Namespace) -> int:
     dest_root = options.dest_root or source_roots[0]
     state = state_module.load(dest_root)
 
+    skip_fast_path = args.identify or args.force_reanalyze or args.force_reidentify
+
     def handle(path: Path) -> None:
-        if state_module.is_unchanged(state, path):
+        if not skip_fast_path and state_module.is_unchanged(state, path):
             return
         result = pipeline.process_file(path)
         if result.error:
@@ -295,9 +349,6 @@ def run_watch(args: argparse.Namespace) -> int:
 
     watcher.watch(source_roots, handle, debounce_seconds=args.debounce_seconds)
     return 0
-
-
-# -------- inspect --------
 
 
 def run_inspect(args: argparse.Namespace) -> int:
@@ -330,12 +381,24 @@ def run_inspect(args: argparse.Namespace) -> int:
             if labels:
                 print(
                     f"  {field} labels: "
-                    + ", ".join(f"{l.name} ({l.confidence:.2f})" for l in labels)
+                    + ", ".join(
+                        f"{label.name} ({label.confidence:.2f})" for label in labels
+                    )
                 )
+
+    identity_fields = tag_writer.read_identity_fields(audio, file_format)
+    if identity_fields:
+        print("\nidentity fields (Picard-interop):")
+        for key, value in identity_fields.items():
+            print(f"  {key}: {value}")
+
+    identity_extended = tag_writer.read_identity_extended(audio, file_format)
+    print(f"\nidentity tag (raw): {identity_extended}")
+    if identity_extended:
+        print("identity tag (parsed):")
+        for key, value in identity_blob.decode_identity(identity_extended).items():
+            print(f"  {key}: {value}")
     return 0
-
-
-# -------- entry point --------
 
 
 def main() -> None:

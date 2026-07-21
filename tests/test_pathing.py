@@ -66,8 +66,6 @@ class TestPathRenderer:
             {"artist": "artist name", "album": "Album", "title": "Track Two"},
             extension="mp3",
         )
-        # Same directory intent despite differing case -- must resolve to the
-        # same actual folder, avoiding a split that would only occur on Linux.
         assert first.parent == second.parent
 
     def test_custom_template(self, tmp_path):

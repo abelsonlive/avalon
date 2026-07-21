@@ -1,95 +1,102 @@
 # avalon
 
-Standalone CLI that analyzes, tags, and organizes a music library: BPM/key
-extraction plus a broad set of Essentia-derived descriptors (mood, energy,
-danceability, acousticness, vocal presence, genre), ID3-family tag
-normalization, cover art embedding, optional format/bit-depth conversion,
-and folder organization -- as a one-shot scan or a watching daemon.
+Analyzes, tags, and organizes a music library: BPM/key extraction, mood/genre/energy
+descriptors via Essentia, ID3/Vorbis/MP4 tag normalization, cover art, format
+conversion, and optional MusicBrainz/Discogs lookups. Runs once over a folder or
+as a watching daemon.
 
 ## Requirements
 
-- Python 3.10 or 3.11 (capped below 3.12 -- see the comment in
-  `pyproject.toml` on the `essentia-tensorflow` pin: it's the newest release
-  with both a macOS arm64 wheel built for an old-enough deployment target to
-  run on common dev machines *and* a Linux x86_64 wheel in the same release)
+- Python 3.10–3.11 (see the `essentia-tensorflow` pin in `pyproject.toml` for why)
 - [uv](https://docs.astral.sh/uv/)
-- `ffmpeg`/`ffprobe` on `PATH`
-  - macOS: `brew install ffmpeg`
-  - Linux: `apt install ffmpeg` (or your distro's equivalent)
+- `ffmpeg` on `PATH` — `brew install ffmpeg` / `apt install ffmpeg`
+- `fpcalc`, only for `--identify` — `brew install chromaprint` / `apt install libchromaprint-tools`
 
-## Installation
+## Install
 
 ```bash
-git clone <repository-url>
-cd avalon
+git clone <repository-url> && cd avalon
 uv sync
 ```
 
-On first run, avalon downloads and caches the Essentia pretrained models it
-needs (~26.5MB total) to `~/.cache/avalon/models/`.
+First run downloads Essentia's models (~26.5MB) to `~/.cache/avalon/models/`.
 
 ## Usage
 
 ```bash
-# Analyze/tag/convert a single file or folder, in place
+# tag in place
 uv run avalon analyze ~/Music/Downloads --recursive
 
-# ...or reorganize into {artist}/{album}/{title}.{ext} under a destination
+# reorganize into {artist}/{album}/{title}.{ext}
 uv run avalon analyze ~/Music/Downloads --recursive --dest ~/Music/Library
 
-# Convert lossless sources (FLAC/ALAC/WAV/AIFF/...) + cap bit depth/sample
-# rate while tagging; mp3/aac/other lossy sources are left untouched
+# convert lossless sources, cap bit depth/sample rate (lossy sources untouched)
 uv run avalon analyze ~/Music/Downloads --dest ~/Music/Library \
     --convert-lossless-to aiff --max-bit-depth 16 --max-sample-rate 48000
 
-# Watch folders continuously; processes the existing backlog on startup,
-# then reacts to new/changed files
-uv run avalon watch ~/Music/Downloads --dest ~/Music/Library
+# watch continuously, -v so you can see it working (backfills on startup)
+uv run avalon watch ~/Music/Downloads --dest ~/Music/Library -v
 
-# Inspect what's actually stored in a file's tags (debugging)
+# also reconcile against MusicBrainz/Discogs
+uv run avalon analyze ~/Music/Downloads --dest ~/Music/Library --identify
+
+# see what's actually in a file's tags
 uv run avalon inspect ~/Music/Library/Artist/Album/01\ -\ Title.aiff
 ```
 
-## Tag schema
+Full flag list: `avalon analyze --help` / `avalon watch --help`.
 
-avalon writes two tags per file, both inside the ID3-family/Vorbis/MP4 tag
-sets already used by common players -- nothing exotic:
+## How it works
 
-- **Headline** (COMM for MP3/AIFF/WAV, DESCRIPTION for FLAC, `desc` for
-  MP4): a short, human-scannable string -- `bpm:128;key:Am;camelot:8A;
-  energy:0.71;genre:Techno`. `key` is standard notation (also what the
-  canonical TKEY/INITIALKEY/MP4 key field gets, matching this library's
-  existing tags); `camelot` is the DJ-wheel equivalent, kept alongside it
-  rather than replacing it. Extends the convention already used by
-  `swinsian-sync`'s `rekordbox_sync.py`; existing non-generated comment
-  text is preserved rather than clobbered.
-  - `--headline-format bpm,key,energy` picks which fields appear and in
-    what order. Available fields: `bpm`, `key`, `camelot`, `energy`,
-    `genre`, `dance`, `acoustic`, `electronic`, `vocal`, `happy`, `sad`,
-    `relaxed`, `party`, `moodtheme`.
-  - `--headline-tag NAME` redirects the headline to a different tag
-    instead of the format's native comment field -- e.g.
-    `--headline-tag AVALON_HEADLINE` writes a `TXXX:AVALON_HEADLINE`
-    frame (ID3-family) or `----:com.avalon:AVALON_HEADLINE` atom (MP4)
-    rather than touching COMM/desc at all. FLAC just uses the given name
-    directly as the Vorbis comment field.
-- **Extended** (`TXXX:AVALON_ANALYSIS` for MP3/AIFF/WAV, a second Vorbis
-  comment field for FLAC, `----:com.avalon:analysis` for MP4): the full
-  descriptor roster as the same style of compact `key=value;...` string,
-  owned entirely by avalon.
+```mermaid
+flowchart TD
+    src[source file]
+    src --> analyze[essentia analysis]
+    src --> fp[acoustid fingerprint]
+    fp --> mb[musicbrainz]
+    fp --> discogs[discogs]
+    src --> conv{convert?}
+    conv -->|yes| ffmpeg
+    conv -->|no| copy[copy in place]
+    analyze --> write[write tags + art]
+    mb --> write
+    discogs --> write
+    ffmpeg --> write
+    copy --> write
+    write --> out[output file]
+```
 
-Canonical fields (title/artist/album/genre/BPM/key) fill in only when
-missing by default -- avalon won't overwrite values you already trust (e.g.
-from Rekordbox/Mixed In Key) unless you pass `--force-reanalyze`.
+Analysis and identify both run against the original file, before any conversion.
+Canonical fields (title/artist/album/genre/bpm/key/date) only fill in when
+missing — nothing gets overwritten unless you pass `--force-reanalyze`.
 
-## Phase 2 (not yet implemented)
+## Tags
 
-MusicBrainz/AcoustID/Discogs ID lookup and enrichment is a deferred stretch
-goal -- the `avalon/identity/` package is stubbed but not wired into the
-pipeline yet.
+Two avalon-owned tags per file: a short headline (`bpm:128;key:Am;camelot:8A;
+energy:0.71;genre:Techno`, in COMM/DESCRIPTION/desc, configurable via
+`--headline-tag`/`--headline-format`) and an extended tag with the full
+descriptor roster (`TXXX:AVALON_ANALYSIS` / a Vorbis field / an MP4 atom).
+
+`--identify` adds a third (`AVALON_IDENTITY`) plus individual MusicBrainz/
+Discogs/AcoustID/ISRC/label/catalog-number fields, written using Picard's own
+tag names — see `avalon/constants.py` for the exact frame/atom per format —
+so avalon-tagged files work with Picard, Navidrome, and anything else
+MusicBrainz-aware.
+
+## Identify setup
+
+Needs at least one of:
+
+- `ACOUSTID_API_KEY` — free at <https://acoustid.org/api-key>
+- `DISCOGS_TOKEN` — from your Discogs account's Developer settings
+
+`--identify` errors if neither is set. `--force-reidentify` redoes
+already-identified files; `--min-identify-confidence` (default `0.7`) is the
+minimum AcoustID score to trust.
 
 ## Development
 
 ```bash
+uv sync --extra test
 uv run pytest
 ```

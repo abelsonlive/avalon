@@ -17,38 +17,30 @@ class Label:
 class TrackAnalysis:
     """Every descriptor essentia extracted for one track."""
 
-    # Rhythm
     bpm: float
     bpm_confidence: float
-    # Tonal
     key: str
     scale: str
     camelot: str | None
     key_strength: float
-    # Loudness / dynamics (plain DSP, not ML)
     loudness: float
     dynamic_complexity: float
-    # Mood (probability of the named concept, 0-1)
     mood_aggressive: float
     mood_happy: float
     mood_sad: float
     mood_relaxed: float
     mood_party: float
-    # Character
     danceability: float
     mood_acoustic: float
     mood_electronic: float
-    voice_probability: float  # P(has vocals), 0-1
-    gender: (
-        str | None
-    )  # "male" / "female" -- only meaningful when voice_probability is high
+    voice_probability: float
+    gender: str | None
     gender_confidence: float
-    tonal_probability: float  # P(tonal) vs atonal, 0-1
-    timbre: str  # "bright" / "dark"
+    tonal_probability: float
+    timbre: str
     timbre_confidence: float
-    # Multi-label
-    genres: list[Label] = field(default_factory=list)  # top-3, by confidence
-    mood_themes: list[Label] = field(default_factory=list)  # top-5, by confidence
+    genres: list[Label] = field(default_factory=list)
+    mood_themes: list[Label] = field(default_factory=list)
 
     schema_version: int = 1
 
@@ -59,12 +51,28 @@ class TrackAnalysis:
 
 @dataclass(slots=True)
 class TrackIdentity:
-    """Phase 2 placeholder -- MusicBrainz/AcoustID/Discogs IDs. Not populated in v1."""
+    """Result of --identify: MusicBrainz/AcoustID/Discogs reconciliation.
+
+    Always constructed (never partially built) once an identify attempt
+    *completes* -- including an all-`None` result when nothing matched, so
+    that outcome is itself recorded and not endlessly retried. A raised
+    exception (network error, etc.), as opposed to a completed no-match, is
+    the only case that should prevent construction of this at all."""
 
     musicbrainz_recording_id: str | None = None
     musicbrainz_release_id: str | None = None
     musicbrainz_artist_id: str | None = None
     discogs_release_id: str | None = None
+    acoustid_id: str | None = None
+    match_confidence: float = 0.0
+    isrc: str | None = None
+    release_date: str | None = None
+    release_country: str | None = None
+    label: str | None = None
+    catalog_number: str | None = None
+    genre: str | None = None
+
+    schema_version: int = 1
 
 
 @dataclass(slots=True)
@@ -75,5 +83,6 @@ class ProcessResult:
     output_path: str
     analyzed: bool
     converted: bool
+    identified: bool = False
     skipped_reason: str | None = None
     error: str | None = None

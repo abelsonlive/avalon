@@ -13,7 +13,7 @@ from mutagen.mp4 import MP4Cover
 
 from avalon.constants import ID3_FAMILY, FileFormat
 
-Artwork = tuple[str, bytes]  # (mime_type, image_bytes)
+Artwork = tuple[str, bytes]
 
 
 def _sniff_mime(data: bytes) -> str:
@@ -66,7 +66,7 @@ def _embed_flac(audio, artwork: Artwork) -> None:
     mime, data = artwork
     audio.clear_pictures()
     picture = Picture()
-    picture.type = 3  # front cover
+    picture.type = 3
     picture.mime = mime
     picture.data = data
     audio.add_picture(picture)

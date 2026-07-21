@@ -17,6 +17,7 @@ file.
 from __future__ import annotations
 
 import logging
+import os
 
 import numpy as np
 
@@ -40,14 +41,11 @@ class EssentiaAnalyzer:
     """Loads every model once; call `analyze(path)` per file."""
 
     def __init__(self) -> None:
-        import essentia
-        import essentia.standard as es  # deferred: heavy import (loads TF)
+        os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
 
-        # Essentia's C++ logger otherwise emits a "No network created, or
-        # last created network has been deleted" warning per TensorFlow
-        # algorithm invocation -- tens of thousands of lines for a real
-        # library. It's noise, not a real problem (verified: results are
-        # correct despite it).
+        import essentia
+        import essentia.standard as es
+
         essentia.log.warningActive = False
         essentia.log.infoActive = False
 
@@ -106,7 +104,7 @@ class EssentiaAnalyzer:
                     )
                     for i in order
                 ]
-            else:  # pragma: no cover - defensive, all current specs match above
+            else:
                 raise ValueError(f"Unknown model kind: {spec.kind!r}")
 
         gender_label, gender_confidence = categorical["gender"]

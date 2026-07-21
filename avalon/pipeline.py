@@ -13,14 +13,16 @@ from __future__ import annotations
 
 import logging
 import shutil
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from avalon.analysis.essentia_analyzer import EssentiaAnalyzer
 from avalon.conversion import converter
-from avalon.models import ProcessResult, TrackAnalysis
+from avalon.identity import credentials as identity_credentials
+from avalon.identity.identity_resolver import IdentityResolver
+from avalon.models import ProcessResult, TrackAnalysis, TrackIdentity
 from avalon.pathing import DEFAULT_TEMPLATE, PathRenderer
-from avalon.tagging import analysis_blob, cover_art, tag_writer
+from avalon.tagging import analysis_blob, cover_art, identity_blob, tag_writer
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,9 @@ class PipelineOptions:
     overwrite_description: bool = False
     headline_tag: str | None = None
     headline_fields: tuple[str, ...] = analysis_blob.DEFAULT_HEADLINE_FIELDS
+    do_identify: bool = False
+    force_reidentify: bool = False
+    min_identify_confidence: float = 0.7
     delete_original: bool = False
     dry_run: bool = False
 
@@ -51,6 +56,7 @@ class Pipeline:
     def __init__(self, options: PipelineOptions):
         self.options = options
         self._analyzer: EssentiaAnalyzer | None = None
+        self._identity_resolver: IdentityResolver | None = None
         self._path_renderer: PathRenderer | None = None
         if options.dest_root:
             self._path_renderer = PathRenderer(options.dest_root, options.path_template)
@@ -59,6 +65,13 @@ class Pipeline:
         if self._analyzer is None:
             self._analyzer = EssentiaAnalyzer()
         return self._analyzer
+
+    def _get_identity_resolver(self) -> IdentityResolver:
+        if self._identity_resolver is None:
+            self._identity_resolver = identity_credentials.build_resolver(
+                self.options.min_identify_confidence
+            )
+        return self._identity_resolver
 
     def process_file(self, source_path: Path | str) -> ProcessResult:
         source_path = Path(source_path)
@@ -81,6 +94,9 @@ class Pipeline:
         source_audio = tag_writer.load(str(source_path), file_format)
         existing_fields = tag_writer.read_canonical(source_audio, file_format)
         existing_extended = tag_writer.read_extended(source_audio, file_format)
+        existing_identity_extended = tag_writer.read_identity_extended(
+            source_audio, file_format
+        )
         artwork = cover_art.extract(source_audio, file_format)
 
         skip_analysis = not opts.force_reanalyze and analysis_blob.has_current_schema(
@@ -88,23 +104,21 @@ class Pipeline:
         )
         will_analyze = opts.do_analyze and not skip_analysis
 
+        skip_identify = not opts.force_reidentify and identity_blob.has_current_schema(
+            existing_identity_extended
+        )
+        will_identify = opts.do_identify and not skip_identify
+
         will_convert = opts.do_convert and converter.needs_conversion(
             str(source_path),
             target_format=opts.convert_lossless_to,
             max_sample_rate=opts.max_sample_rate,
             max_bit_depth=opts.max_bit_depth,
         )
-        # The *actual* output format is only ever different from the
-        # source's own when a conversion is actually going to happen --
-        # e.g. needs_conversion() already declined to touch lossy sources
-        # (mp3, aac, ...) regardless of --convert-lossless-to, so the
-        # destination path must reflect that rather than assuming it
-        # always applies. Otherwise an mp3 gets byte-copied into a file
-        # named ".aiff", which then fails to load as AIFF.
         target_format = (
             (opts.convert_lossless_to or file_format.value)
             if will_convert
-            else file_format.value
+            else source_path.suffix.lstrip(".")
         )
 
         output_path = self._compute_output_path(
@@ -117,6 +131,7 @@ class Pipeline:
                 output_path=str(output_path),
                 analyzed=will_analyze,
                 converted=will_convert,
+                identified=will_identify,
                 skipped_reason="dry-run",
             )
 
@@ -124,27 +139,52 @@ class Pipeline:
         if will_analyze:
             analysis = self._get_analyzer().analyze(str(source_path))
 
+        identity: TrackIdentity | None = None
+        if will_identify:
+            try:
+                identity = self._get_identity_resolver().resolve(
+                    str(source_path), existing_fields
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Identify failed for %s, continuing without it: %s",
+                    source_path,
+                    exc,
+                )
+
         self._materialize(source_path, output_path, will_convert, target_format)
 
         output_format = tag_writer.detect_format(str(output_path))
-        # Reuse the already-loaded object only if the file on disk truly
-        # wasn't touched -- a same-path in-place conversion still replaces
-        # the file's bytes, so `source_audio` would otherwise be stale.
         output_audio = (
             source_audio
             if output_path == source_path and not will_convert
             else tag_writer.load(str(output_path), output_format)
         )
 
-        if analysis is not None:
+        if analysis is not None or identity is not None:
+            if identity and identity.genre:
+                resolved_genre = identity.genre
+            elif analysis:
+                resolved_genre = analysis.top_genre
+            else:
+                resolved_genre = None
             tag_writer.write_generated_fields(
                 output_audio,
                 output_format,
-                bpm=str(round(analysis.bpm)),
-                key=analysis_blob.standard_key(analysis),
-                genre=analysis.top_genre,
+                bpm=str(round(analysis.bpm)) if analysis else None,
+                key=analysis_blob.standard_key(analysis) if analysis else None,
+                genre=resolved_genre,
+                date=identity.release_date if identity else None,
                 fill_only_if_missing=True,
             )
+            tag_writer.write_release_date(
+                output_audio,
+                output_format,
+                identity.release_date if identity else None,
+                fill_only_if_missing=True,
+            )
+
+        if analysis is not None:
             existing_headline = (
                 None
                 if opts.overwrite_description
@@ -164,6 +204,9 @@ class Pipeline:
                 output_audio, output_format, analysis_blob.encode_extended(analysis)
             )
 
+        if identity is not None:
+            self._write_identity(output_audio, output_format, identity)
+
         if artwork is not None:
             cover_art.embed(output_audio, output_format, artwork)
 
@@ -177,6 +220,32 @@ class Pipeline:
             output_path=str(output_path),
             analyzed=analysis is not None,
             converted=will_convert,
+            identified=identity is not None,
+        )
+
+    @staticmethod
+    def _write_identity(output_audio, output_format, identity: TrackIdentity) -> None:
+        """Picard-interop identity fields are fill-only-if-missing (a
+        Picard-tagged file's existing MBIDs must never be clobbered); the
+        avalon-owned AVALON_IDENTITY blob is always fully replaced, same
+        as the analysis extended tag.
+
+        The taggable field set comes from `tag_writer.IDENTITY_FIELD_NAMES`
+        (itself derived from `IdentityFieldMap`), not hand-typed here, so
+        `TrackIdentity`'s own fields are the only other place naming this
+        set -- adding a field to one and not the other is the only
+        remaining way for them to drift."""
+        values = {
+            field: value
+            for field, value in asdict(identity).items()
+            if field in tag_writer.IDENTITY_FIELD_NAMES and value
+        }
+        existing = tag_writer.read_identity_fields(output_audio, output_format)
+        to_write = {k: v for k, v in values.items() if not existing.get(k)}
+        if to_write:
+            tag_writer.write_identity_fields(output_audio, output_format, to_write)
+        tag_writer.write_identity_extended(
+            output_audio, output_format, identity_blob.encode_identity(identity)
         )
 
     def _compute_output_path(
@@ -208,8 +277,6 @@ class Pipeline:
             return
         output_path.parent.mkdir(parents=True, exist_ok=True)
         if will_convert:
-            # ffmpeg can't read and write the same file at once; convert to
-            # a temp path and swap it into place when the target IS the source.
             convert_target = (
                 output_path.with_name(f".{output_path.name}.avalon_tmp")
                 if output_path == source_path
