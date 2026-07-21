@@ -1,0 +1,43 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "avalon"
+version = "0.1.0"
+description = "Standalone audio analysis, tagging, and organization CLI"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "abelsonlive" },
+]
+requires-python = ">=3.10,<3.12"
+dependencies = [
+    # essentia-tensorflow is a full replacement for `essentia` (same `essentia`
+    # import, plus the Tensorflow* algorithms) -- do not depend on both.
+    # Pinned to dev1110: the newest release with both a macOS arm64 wheel
+    # built for an old-enough deployment target (11.0) to run on this dev
+    # machine (macOS 13.4) *and* a linux x86_64 wheel in the same release.
+    # Newer releases (dev1177+) dropped linux wheels; dev1389+ raised the
+    # arm64 deployment target to macOS 15. Caps us at Python 3.11.
+    "essentia-tensorflow==2.1b6.dev1110",
+    # dev1110 was compiled against NumPy 1.x's C API; NumPy 2.x breaks its
+    # ABI at import time (`_ARRAY_API not found`).
+    "numpy<2",
+    "ffmpeg-python>=0.2.0",
+    "mutagen>=1.48.0",
+    "watchdog>=6.0.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.scripts]
+avalon = "avalon.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["avalon"]
