@@ -55,8 +55,11 @@ avalon writes two tags per file, both inside the ID3-family/Vorbis/MP4 tag
 sets already used by common players -- nothing exotic:
 
 - **Headline** (COMM for MP3/AIFF/WAV, DESCRIPTION for FLAC, `desc` for
-  MP4): a short, human-scannable string -- `bpm:128;key:8A;energy:0.71;
-  genre:Techno`. Extends the convention already used by
+  MP4): a short, human-scannable string -- `bpm:128;key:Am;camelot:8A;
+  energy:0.71;genre:Techno`. `key` is standard notation (also what the
+  canonical TKEY/INITIALKEY/MP4 key field gets, matching this library's
+  existing tags); `camelot` is the DJ-wheel equivalent, kept alongside it
+  rather than replacing it. Extends the convention already used by
   `swinsian-sync`'s `rekordbox_sync.py`; existing non-generated comment
   text is preserved rather than clobbered.
 - **Extended** (`TXXX:AVALON_ANALYSIS` for MP3/AIFF/WAV, a second Vorbis

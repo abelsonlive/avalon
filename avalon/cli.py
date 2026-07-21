@@ -110,6 +110,14 @@ def gather_files(sources: list[str], recursive: bool) -> list[Path]:
     return sorted(files)
 
 
+def _default_state_dir(first_source: str) -> Path:
+    """Where to keep .avalon_state.json when --dest wasn't given. `sources`
+    for `analyze` may be individual files, not just folders, so this can't
+    just assume the first source itself is a directory."""
+    path = Path(first_source).resolve()
+    return path if path.is_dir() else path.parent
+
+
 def _pipeline_options_from_args(args: argparse.Namespace) -> PipelineOptions:
     return PipelineOptions(
         dest_root=Path(args.dest) if args.dest else None,
@@ -139,7 +147,7 @@ def run_analyze(args: argparse.Namespace) -> int:
 
     options = _pipeline_options_from_args(args)
     pipeline = Pipeline(options)
-    dest_root = options.dest_root or Path(args.sources[0]).resolve()
+    dest_root = options.dest_root or _default_state_dir(args.sources[0])
     state = state_module.load(dest_root)
 
     failures: list[tuple[Path, str]] = []

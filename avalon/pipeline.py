@@ -128,7 +128,7 @@ class Pipeline:
                 output_audio,
                 output_format,
                 bpm=str(round(analysis.bpm)),
-                key=analysis.camelot or analysis.key,
+                key=analysis_blob.standard_key(analysis),
                 genre=analysis.top_genre,
                 fill_only_if_missing=True,
             )

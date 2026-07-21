@@ -36,19 +36,22 @@ def _sample_analysis(**overrides) -> TrackAnalysis:
 class TestHeadline:
     def test_encode_from_scratch(self):
         result = analysis_blob.encode_headline(_sample_analysis(), existing=None)
-        assert result == "bpm:128;key:8A;energy:0.71;genre:Electronic / Techno"
+        assert result == "bpm:128;key:Am;camelot:8A;energy:0.71;genre:Electronic / Techno"
 
-    def test_camelot_falls_back_to_key_and_scale(self):
+    def test_key_is_standard_notation_regardless_of_camelot(self):
         analysis = _sample_analysis(camelot=None, key="F#", scale="minor")
         result = analysis_blob.encode_headline(analysis, existing=None)
-        assert "key:F#m" in result
+        parsed = analysis_blob.parse_headline(result)
+        assert parsed["key"] == "F#m"
+        assert "camelot" not in parsed  # nothing to report when essentia's key/scale has no mapping
 
     def test_merges_into_existing_generated_style_tag(self):
         existing = "bpm:120;key:Am;mynote:keep-me"
         result = analysis_blob.encode_headline(_sample_analysis(), existing=existing)
         parsed = analysis_blob.parse_headline(result)
         assert parsed["bpm"] == "128"
-        assert parsed["key"] == "8A"
+        assert parsed["key"] == "Am"
+        assert parsed["camelot"] == "8A"
         assert parsed["mynote"] == "keep-me"  # untouched, not clobbered
 
     def test_preserves_freeform_comment_instead_of_clobbering(self):

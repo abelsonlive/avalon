@@ -21,12 +21,13 @@ from avalon.constants import ANALYSIS_SCHEMA_VERSION
 from avalon.models import Label, TrackAnalysis
 
 _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-HEADLINE_FIELDS = ("bpm", "key", "energy", "genre")
+HEADLINE_FIELDS = ("bpm", "key", "camelot", "energy", "genre")
 
 
-def _display_key(analysis: TrackAnalysis) -> str:
-    if analysis.camelot:
-        return analysis.camelot
+def standard_key(analysis: TrackAnalysis) -> str:
+    """Standard notation (e.g. "C", "F#m") -- what ID3's TKEY/Vorbis'
+    INITIALKEY conventionally hold, and what this library's existing tags
+    already use (as opposed to Camelot-wheel notation)."""
     suffix = "m" if analysis.scale == "minor" else ""
     return f"{analysis.key}{suffix}"
 
@@ -58,7 +59,8 @@ def encode_headline(analysis: TrackAnalysis, existing: str | None = None) -> str
     """Builds the headline string, merging into `existing` when possible."""
     new_values = {
         "bpm": str(round(analysis.bpm)),
-        "key": _display_key(analysis),
+        "key": standard_key(analysis),
+        "camelot": analysis.camelot or "",
         "energy": f"{analysis.mood_aggressive:.2f}",
         "genre": analysis.top_genre or "",
     }
