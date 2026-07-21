@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 class PipelineOptions:
     dest_root: Path | None = None
     path_template: str = DEFAULT_TEMPLATE
-    convert_to: str | None = None
+    convert_lossless_to: str | None = None
     max_sample_rate: int | None = None
     max_bit_depth: int | None = None
     do_analyze: bool = True
@@ -88,18 +88,20 @@ class Pipeline:
 
         will_convert = opts.do_convert and converter.needs_conversion(
             str(source_path),
-            target_format=opts.convert_to,
+            target_format=opts.convert_lossless_to,
             max_sample_rate=opts.max_sample_rate,
             max_bit_depth=opts.max_bit_depth,
         )
         # The *actual* output format is only ever different from the
         # source's own when a conversion is actually going to happen --
         # e.g. needs_conversion() already declined to touch lossy sources
-        # (mp3, aac, ...) regardless of --convert-to, so the destination
-        # path must reflect that rather than assuming --convert-to always
-        # applies. Otherwise an mp3 gets byte-copied into a file named
-        # ".aiff", which then fails to load as AIFF.
-        target_format = (opts.convert_to or file_format.value) if will_convert else file_format.value
+        # (mp3, aac, ...) regardless of --convert-lossless-to, so the
+        # destination path must reflect that rather than assuming it
+        # always applies. Otherwise an mp3 gets byte-copied into a file
+        # named ".aiff", which then fails to load as AIFF.
+        target_format = (
+            (opts.convert_lossless_to or file_format.value) if will_convert else file_format.value
+        )
 
         output_path = self._compute_output_path(
             source_path, existing_fields, target_format, opts.overwrite

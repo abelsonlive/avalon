@@ -37,9 +37,10 @@ uv run avalon analyze ~/Music/Downloads --recursive
 # ...or reorganize into {artist}/{album}/{title}.{ext} under a destination
 uv run avalon analyze ~/Music/Downloads --recursive --dest ~/Music/Library
 
-# Convert + cap bit depth/sample rate while tagging
+# Convert lossless sources (FLAC/ALAC/WAV/AIFF/...) + cap bit depth/sample
+# rate while tagging; mp3/aac/other lossy sources are left untouched
 uv run avalon analyze ~/Music/Downloads --dest ~/Music/Library \
-    --convert-to aiff --max-bit-depth 16 --max-sample-rate 48000
+    --convert-lossless-to aiff --max-bit-depth 16 --max-sample-rate 48000
 
 # Watch folders continuously; processes the existing backlog on startup,
 # then reacts to new/changed files

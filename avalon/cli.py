@@ -69,7 +69,13 @@ def _add_watch_parser(subparsers) -> argparse.ArgumentParser:
 def _add_pipeline_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dest", type=str, default=None, help="Destination root; omit to tag in place")
     parser.add_argument("--path-template", type=str, default=DEFAULT_TEMPLATE)
-    parser.add_argument("--convert-to", type=str, default=None, help="Target format (e.g. aiff)")
+    parser.add_argument(
+        "--convert-lossless-to",
+        type=str,
+        default=None,
+        help="Re-encode lossless sources (FLAC/ALAC/WAV/AIFF/...) to this format (e.g. aiff); "
+        "lossy sources (mp3, aac, ...) are left untouched regardless",
+    )
     parser.add_argument("--max-sample-rate", type=int, default=None)
     parser.add_argument("--max-bit-depth", type=int, default=None)
     parser.add_argument("--no-analyze", action="store_true", help="Skip essentia analysis")
@@ -122,7 +128,7 @@ def _pipeline_options_from_args(args: argparse.Namespace) -> PipelineOptions:
     return PipelineOptions(
         dest_root=Path(args.dest) if args.dest else None,
         path_template=args.path_template,
-        convert_to=args.convert_to,
+        convert_lossless_to=args.convert_lossless_to,
         max_sample_rate=args.max_sample_rate,
         max_bit_depth=args.max_bit_depth,
         do_analyze=not args.no_analyze,
