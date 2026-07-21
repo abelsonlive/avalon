@@ -20,9 +20,21 @@ logger = logging.getLogger(__name__)
 _PCM_CODEC_BY_BIT_DEPTH = {8: "pcm_u8", 16: "pcm_s16le", 24: "pcm_s24le", 32: "pcm_s32le"}
 _PCM_CONTAINER_FORMATS = {"aiff", "wav"}
 
+# Codec, not container: M4A can hold either lossy AAC or lossless ALAC, so
+# the file extension alone can't tell you which.
+_LOSSLESS_CODECS = {
+    "flac", "alac", "ape", "wavpack", "tta",
+    "pcm_s8", "pcm_u8", "pcm_s16le", "pcm_s16be",
+    "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be", "pcm_f32le",
+}
+
 
 class ConversionError(Exception):
     pass
+
+
+def is_lossless(codec_name: str | None) -> bool:
+    return codec_name in _LOSSLESS_CODECS
 
 
 def _select_pcm_codec(bit_depth: int) -> str:
@@ -54,10 +66,21 @@ def needs_conversion(
     max_sample_rate: int | None,
     max_bit_depth: int | None,
 ) -> bool:
+    """Whether `path` should be re-encoded.
+
+    Already-lossy sources (mp3, aac, ...) are never converted, regardless
+    of `target_format`/`max_sample_rate`/`max_bit_depth`: there's no
+    quality to recover by moving lossy audio into a different container or
+    bit depth, only a larger file baking in the same artifacts. This is a
+    codec check, not an extension check -- M4A can hold either lossy AAC
+    or lossless ALAC.
+    """
+    info = probe(path)
+    if not is_lossless(info["codec_name"]):
+        return False
     current_format = Path(path).suffix.lower().lstrip(".")
     if target_format and target_format != current_format:
         return True
-    info = probe(path)
     if max_sample_rate and info["sample_rate"] > max_sample_rate:
         return True
     if max_bit_depth and info["bit_depth"] and info["bit_depth"] > max_bit_depth:
