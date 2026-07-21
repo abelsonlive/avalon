@@ -32,7 +32,7 @@ _TOP_N_BY_MODEL = {"genre_discogs400": 3, "mtg_jamendo_moodtheme": 5}
 
 
 def _clean_label(raw: str) -> str:
-    """"Electronic---Techno" -> "Electronic / Techno" for readability."""
+    """ "Electronic---Techno" -> "Electronic / Techno" for readability."""
     return raw.replace("---", " / ")
 
 
@@ -60,7 +60,9 @@ class EssentiaAnalyzer:
         for spec in model_cache.CLASSIFIER_HEADS:
             meta = model_cache.get_classifier(spec)
             algo = es.TensorflowPredict2D(
-                graphFilename=meta.pb_path, input=meta.input_name, output=meta.output_name
+                graphFilename=meta.pb_path,
+                input=meta.input_name,
+                output=meta.output_name,
             )
             self._classifiers[spec.name] = (algo, meta)
 
@@ -98,7 +100,10 @@ class EssentiaAnalyzer:
                 top_n = _TOP_N_BY_MODEL[spec.name]
                 order = np.argsort(track_scores)[::-1][:top_n]
                 multilabel[spec.name] = [
-                    Label(name=_clean_label(meta.classes[i]), confidence=float(track_scores[i]))
+                    Label(
+                        name=_clean_label(meta.classes[i]),
+                        confidence=float(track_scores[i]),
+                    )
                     for i in order
                 ]
             else:  # pragma: no cover - defensive, all current specs match above

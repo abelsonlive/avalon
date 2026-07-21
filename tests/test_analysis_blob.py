@@ -1,3 +1,5 @@
+import pytest
+
 from avalon.models import Label, TrackAnalysis
 from avalon.tagging import analysis_blob
 
@@ -26,7 +28,10 @@ def _sample_analysis(**overrides) -> TrackAnalysis:
         tonal_probability=0.9,
         timbre="bright",
         timbre_confidence=0.53,
-        genres=[Label("Electronic / Techno", 0.82), Label("Electronic / Tech House", 0.61)],
+        genres=[
+            Label("Electronic / Techno", 0.82),
+            Label("Electronic / Tech House", 0.61),
+        ],
         mood_themes=[Label("driving", 0.71), Label("dark", 0.5)],
     )
     defaults.update(overrides)
@@ -36,14 +41,18 @@ def _sample_analysis(**overrides) -> TrackAnalysis:
 class TestHeadline:
     def test_encode_from_scratch(self):
         result = analysis_blob.encode_headline(_sample_analysis(), existing=None)
-        assert result == "bpm:128;key:Am;camelot:8A;energy:0.71;genre:Electronic / Techno"
+        assert (
+            result == "bpm:128;key:Am;camelot:8A;energy:0.71;genre:Electronic / Techno"
+        )
 
     def test_key_is_standard_notation_regardless_of_camelot(self):
         analysis = _sample_analysis(camelot=None, key="F#", scale="minor")
         result = analysis_blob.encode_headline(analysis, existing=None)
         parsed = analysis_blob.parse_headline(result)
         assert parsed["key"] == "F#m"
-        assert "camelot" not in parsed  # nothing to report when essentia's key/scale has no mapping
+        assert (
+            "camelot" not in parsed
+        )  # nothing to report when essentia's key/scale has no mapping
 
     def test_merges_into_existing_generated_style_tag(self):
         existing = "bpm:120;key:Am;mynote:keep-me"
@@ -73,6 +82,36 @@ class TestHeadline:
     def test_parse_headline_empty(self):
         assert analysis_blob.parse_headline(None) == {}
         assert analysis_blob.parse_headline("") == {}
+
+    def test_custom_fields_subset_and_order(self):
+        result = analysis_blob.encode_headline(
+            _sample_analysis(), existing=None, fields=("genre", "bpm")
+        )
+        assert result == "genre:Electronic / Techno;bpm:128"
+
+    def test_custom_fields_can_include_extras_beyond_the_default_five(self):
+        result = analysis_blob.encode_headline(
+            _sample_analysis(), existing=None, fields=("dance", "vocal", "moodtheme")
+        )
+        parsed = analysis_blob.parse_headline(result)
+        assert parsed == {"dance": "0.62", "vocal": "0.42", "moodtheme": "driving"}
+
+
+class TestParseHeadlineFields:
+    def test_valid_list(self):
+        assert analysis_blob.parse_headline_fields("bpm, key,genre") == (
+            "bpm",
+            "key",
+            "genre",
+        )
+
+    def test_rejects_unknown_field(self):
+        with pytest.raises(ValueError, match="unknown field"):
+            analysis_blob.parse_headline_fields("bpm,not_a_real_field")
+
+    def test_rejects_empty(self):
+        with pytest.raises(ValueError, match="at least one field"):
+            analysis_blob.parse_headline_fields("")
 
 
 class TestExtended:

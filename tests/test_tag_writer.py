@@ -32,7 +32,9 @@ class TestReadWriteRoundTrip:
             audio, fmt, bpm="128", key="8A", genre="Techno", fill_only_if_missing=False
         )
         tag_writer.write_headline(audio, fmt, "bpm:128;key:8A;energy:0.71;genre:Techno")
-        tag_writer.write_extended(audio, fmt, "av=1;bpm=128.0000;key=A;scale=minor;camelot=8A")
+        tag_writer.write_extended(
+            audio, fmt, "av=1;bpm=128.0000;key=A;scale=minor;camelot=8A"
+        )
         tag_writer.save(audio)
 
         reloaded = tag_writer.load(fixture_path, fmt)
@@ -40,8 +42,14 @@ class TestReadWriteRoundTrip:
         assert canonical["bpm"] == "128"
         assert canonical["key"] == "8A"
         assert canonical["genre"] == "Techno"
-        assert tag_writer.read_headline(reloaded, fmt) == "bpm:128;key:8A;energy:0.71;genre:Techno"
-        assert tag_writer.read_extended(reloaded, fmt) == "av=1;bpm=128.0000;key=A;scale=minor;camelot=8A"
+        assert (
+            tag_writer.read_headline(reloaded, fmt)
+            == "bpm:128;key:8A;energy:0.71;genre:Techno"
+        )
+        assert (
+            tag_writer.read_extended(reloaded, fmt)
+            == "av=1;bpm=128.0000;key=A;scale=minor;camelot=8A"
+        )
 
     def test_fill_only_if_missing_preserves_existing_values(self, fixture_path):
         fmt = tag_writer.detect_format(fixture_path)
@@ -49,7 +57,12 @@ class TestReadWriteRoundTrip:
         before = tag_writer.read_canonical(audio, fmt)
 
         tag_writer.write_generated_fields(
-            audio, fmt, bpm="999", key="1A", genre="ShouldNotAppear", fill_only_if_missing=True
+            audio,
+            fmt,
+            bpm="999",
+            key="1A",
+            genre="ShouldNotAppear",
+            fill_only_if_missing=True,
         )
         tag_writer.save(audio)
 
@@ -65,11 +78,51 @@ class TestReadWriteRoundTrip:
         tag_writer.save(audio)
 
         reloaded = tag_writer.load(fixture_path, fmt)
-        tag_writer.write_headline(reloaded, fmt, "bpm:200;key:2A;energy:0.9;genre:Techno")
+        tag_writer.write_headline(
+            reloaded, fmt, "bpm:200;key:2A;energy:0.9;genre:Techno"
+        )
         tag_writer.save(reloaded)
 
         final = tag_writer.load(fixture_path, fmt)
-        assert tag_writer.read_headline(final, fmt) == "bpm:200;key:2A;energy:0.9;genre:Techno"
+        assert (
+            tag_writer.read_headline(final, fmt)
+            == "bpm:200;key:2A;energy:0.9;genre:Techno"
+        )
+
+
+class TestHeadlineTagOverride:
+    """--headline-tag: writing the headline somewhere other than the
+    format's native comment slot (COMM/DESCRIPTION/desc)."""
+
+    _NATIVE_NAME = {"mp3": "COMM", "aiff": "COMM", "flac": "DESCRIPTION", "mp4": "desc"}
+
+    def test_custom_tag_name_round_trips_and_leaves_native_slot_untouched(
+        self, fixture_path
+    ):
+        fmt = tag_writer.detect_format(fixture_path)
+        audio = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_headline(audio, fmt, "bpm:128;key:8A", "AVALON_HEADLINE")
+        tag_writer.save(audio)
+
+        reloaded = tag_writer.load(fixture_path, fmt)
+        assert (
+            tag_writer.read_headline(reloaded, fmt, "AVALON_HEADLINE")
+            == "bpm:128;key:8A"
+        )
+        # Native slot never written by this test -- some fixtures ship with
+        # a pre-existing but empty native field, hence falsy rather than
+        # strictly None.
+        assert not tag_writer.read_headline(reloaded, fmt)
+
+    def test_explicit_native_name_behaves_like_the_default(self, fixture_path):
+        fmt = tag_writer.detect_format(fixture_path)
+        native_name = self._NATIVE_NAME[fmt.value]
+        audio = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_headline(audio, fmt, "bpm:128;key:8A", native_name)
+        tag_writer.save(audio)
+
+        reloaded = tag_writer.load(fixture_path, fmt)
+        assert tag_writer.read_headline(reloaded, fmt) == "bpm:128;key:8A"
 
 
 class TestBpmZeroSentinel:
@@ -101,7 +154,9 @@ class TestWaveIsTaggable:
 
         source = str(FIXTURES / "test.mp3")
         dest = str(tmp_path / "test.wav")
-        ffmpeg.output(ffmpeg.input(source), dest, t=2, loglevel="error").run(overwrite_output=True)
+        ffmpeg.output(ffmpeg.input(source), dest, t=2, loglevel="error").run(
+            overwrite_output=True
+        )
         return dest
 
     def test_wave_round_trip(self, wav_path):
@@ -118,7 +173,10 @@ class TestWaveIsTaggable:
         canonical = tag_writer.read_canonical(reloaded, fmt)
         assert canonical["bpm"] == "140"
         assert canonical["key"] == "9A"
-        assert tag_writer.read_headline(reloaded, fmt) == "bpm:140;key:9A;energy:0.8;genre:Trance"
+        assert (
+            tag_writer.read_headline(reloaded, fmt)
+            == "bpm:140;key:9A;energy:0.8;genre:Trance"
+        )
         assert tag_writer.read_extended(reloaded, fmt) == "av=1;bpm=140.0"
 
 

@@ -37,6 +37,8 @@ class PipelineOptions:
     force_reanalyze: bool = False
     overwrite: bool = False
     overwrite_description: bool = False
+    headline_tag: str | None = None
+    headline_fields: tuple[str, ...] = analysis_blob.DEFAULT_HEADLINE_FIELDS
     delete_original: bool = False
     dry_run: bool = False
 
@@ -100,7 +102,9 @@ class Pipeline:
         # always applies. Otherwise an mp3 gets byte-copied into a file
         # named ".aiff", which then fails to load as AIFF.
         target_format = (
-            (opts.convert_lossless_to or file_format.value) if will_convert else file_format.value
+            (opts.convert_lossless_to or file_format.value)
+            if will_convert
+            else file_format.value
         )
 
         output_path = self._compute_output_path(
@@ -141,13 +145,24 @@ class Pipeline:
                 genre=analysis.top_genre,
                 fill_only_if_missing=True,
             )
-            existing_headline = None if opts.overwrite_description else tag_writer.read_headline(
-                output_audio, output_format
+            existing_headline = (
+                None
+                if opts.overwrite_description
+                else tag_writer.read_headline(
+                    output_audio, output_format, opts.headline_tag
+                )
             )
             tag_writer.write_headline(
-                output_audio, output_format, analysis_blob.encode_headline(analysis, existing_headline)
+                output_audio,
+                output_format,
+                analysis_blob.encode_headline(
+                    analysis, existing_headline, fields=opts.headline_fields
+                ),
+                opts.headline_tag,
             )
-            tag_writer.write_extended(output_audio, output_format, analysis_blob.encode_extended(analysis))
+            tag_writer.write_extended(
+                output_audio, output_format, analysis_blob.encode_extended(analysis)
+            )
 
         if artwork is not None:
             cover_art.embed(output_audio, output_format, artwork)
@@ -172,13 +187,19 @@ class Pipeline:
         overwrite: bool,
     ) -> Path:
         if self._path_renderer is not None:
-            return self._path_renderer.render(existing_fields, target_format, allow_overwrite=overwrite)
+            return self._path_renderer.render(
+                existing_fields, target_format, allow_overwrite=overwrite
+            )
         if target_format == source_path.suffix.lstrip("."):
             return source_path
         return source_path.with_suffix(f".{target_format}")
 
     def _materialize(
-        self, source_path: Path, output_path: Path, will_convert: bool, target_format: str
+        self,
+        source_path: Path,
+        output_path: Path,
+        will_convert: bool,
+        target_format: str,
     ) -> None:
         """Gets bytes onto disk at `output_path`: converts, copies, or (if
         `output_path == source_path` and no conversion is needed) does

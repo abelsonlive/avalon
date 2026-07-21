@@ -45,13 +45,19 @@ class ModelSpec:
 CLASSIFIER_HEADS: tuple[ModelSpec, ...] = (
     ModelSpec("danceability", "danceability", "binary", positive_label="danceable"),
     ModelSpec("mood_acoustic", "mood_acoustic", "binary", positive_label="acoustic"),
-    ModelSpec("mood_aggressive", "mood_aggressive", "binary", positive_label="aggressive"),
-    ModelSpec("mood_electronic", "mood_electronic", "binary", positive_label="electronic"),
+    ModelSpec(
+        "mood_aggressive", "mood_aggressive", "binary", positive_label="aggressive"
+    ),
+    ModelSpec(
+        "mood_electronic", "mood_electronic", "binary", positive_label="electronic"
+    ),
     ModelSpec("mood_happy", "mood_happy", "binary", positive_label="happy"),
     ModelSpec("mood_sad", "mood_sad", "binary", positive_label="sad"),
     ModelSpec("mood_relaxed", "mood_relaxed", "binary", positive_label="relaxed"),
     ModelSpec("mood_party", "mood_party", "binary", positive_label="party"),
-    ModelSpec("voice_instrumental", "voice_instrumental", "binary", positive_label="voice"),
+    ModelSpec(
+        "voice_instrumental", "voice_instrumental", "binary", positive_label="voice"
+    ),
     ModelSpec("tonal_atonal", "tonal_atonal", "binary", positive_label="tonal"),
     ModelSpec("gender", "gender", "categorical"),
     ModelSpec("timbre", "timbre", "categorical"),

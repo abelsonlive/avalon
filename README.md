@@ -63,6 +63,16 @@ sets already used by common players -- nothing exotic:
   rather than replacing it. Extends the convention already used by
   `swinsian-sync`'s `rekordbox_sync.py`; existing non-generated comment
   text is preserved rather than clobbered.
+  - `--headline-format bpm,key,energy` picks which fields appear and in
+    what order. Available fields: `bpm`, `key`, `camelot`, `energy`,
+    `genre`, `dance`, `acoustic`, `electronic`, `vocal`, `happy`, `sad`,
+    `relaxed`, `party`, `moodtheme`.
+  - `--headline-tag NAME` redirects the headline to a different tag
+    instead of the format's native comment field -- e.g.
+    `--headline-tag AVALON_HEADLINE` writes a `TXXX:AVALON_HEADLINE`
+    frame (ID3-family) or `----:com.avalon:AVALON_HEADLINE` atom (MP4)
+    rather than touching COMM/desc at all. FLAC just uses the given name
+    directly as the Vorbis comment field.
 - **Extended** (`TXXX:AVALON_ANALYSIS` for MP3/AIFF/WAV, a second Vorbis
   comment field for FLAC, `----:com.avalon:analysis` for MP4): the full
   descriptor roster as the same style of compact `key=value;...` string,

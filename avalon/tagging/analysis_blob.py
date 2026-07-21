@@ -16,12 +16,12 @@ it's just overwritten wholesale each run.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from avalon.constants import ANALYSIS_SCHEMA_VERSION
 from avalon.models import Label, TrackAnalysis
 
 _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-HEADLINE_FIELDS = ("bpm", "key", "camelot", "energy", "genre")
 
 
 def standard_key(analysis: TrackAnalysis) -> str:
@@ -30,6 +30,44 @@ def standard_key(analysis: TrackAnalysis) -> str:
     already use (as opposed to Camelot-wheel notation)."""
     suffix = "m" if analysis.scale == "minor" else ""
     return f"{analysis.key}{suffix}"
+
+
+# Every field selectable via --headline-format, and how to render it from a
+# TrackAnalysis. Kept to scalar/short values -- this tag is meant to stay
+# compact and human-scannable; the full roster lives in the extended tag.
+HEADLINE_FIELD_VALUES: dict[str, Callable[[TrackAnalysis], str]] = {
+    "bpm": lambda a: str(round(a.bpm)),
+    "key": standard_key,
+    "camelot": lambda a: a.camelot or "",
+    "energy": lambda a: f"{a.mood_aggressive:.2f}",
+    "genre": lambda a: a.top_genre or "",
+    "dance": lambda a: f"{a.danceability:.2f}",
+    "acoustic": lambda a: f"{a.mood_acoustic:.2f}",
+    "electronic": lambda a: f"{a.mood_electronic:.2f}",
+    "vocal": lambda a: f"{a.voice_probability:.2f}",
+    "happy": lambda a: f"{a.mood_happy:.2f}",
+    "sad": lambda a: f"{a.mood_sad:.2f}",
+    "relaxed": lambda a: f"{a.mood_relaxed:.2f}",
+    "party": lambda a: f"{a.mood_party:.2f}",
+    "moodtheme": lambda a: a.mood_themes[0].name if a.mood_themes else "",
+}
+
+DEFAULT_HEADLINE_FIELDS: tuple[str, ...] = ("bpm", "key", "camelot", "energy", "genre")
+
+
+def parse_headline_fields(raw: str) -> tuple[str, ...]:
+    """Parses a `--headline-format` value: a comma-separated, ordered list
+    of field names. Raises ValueError (not caught here -- callers decide
+    how to surface it) listing the valid set if anything doesn't match."""
+    fields = tuple(f.strip() for f in raw.split(",") if f.strip())
+    unknown = [f for f in fields if f not in HEADLINE_FIELD_VALUES]
+    if unknown or not fields:
+        valid = ", ".join(HEADLINE_FIELD_VALUES)
+        reason = (
+            f"unknown field(s) {unknown}" if unknown else "must name at least one field"
+        )
+        raise ValueError(f"{reason} -- valid fields: {valid}")
+    return fields
 
 
 def parse_headline(value: str | None) -> dict[str, str] | None:
@@ -55,15 +93,13 @@ def parse_headline(value: str | None) -> dict[str, str] | None:
     return result
 
 
-def encode_headline(analysis: TrackAnalysis, existing: str | None = None) -> str:
+def encode_headline(
+    analysis: TrackAnalysis,
+    existing: str | None = None,
+    fields: tuple[str, ...] = DEFAULT_HEADLINE_FIELDS,
+) -> str:
     """Builds the headline string, merging into `existing` when possible."""
-    new_values = {
-        "bpm": str(round(analysis.bpm)),
-        "key": standard_key(analysis),
-        "camelot": analysis.camelot or "",
-        "energy": f"{analysis.mood_aggressive:.2f}",
-        "genre": analysis.top_genre or "",
-    }
+    new_values = {name: HEADLINE_FIELD_VALUES[name](analysis) for name in fields}
     new_values = {k: v for k, v in new_values.items() if v}
 
     parsed = parse_headline(existing)

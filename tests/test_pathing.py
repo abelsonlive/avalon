@@ -29,7 +29,10 @@ class TestPathRenderer:
     def test_missing_fields_fall_back_to_unknown(self, tmp_path):
         renderer = PathRenderer(tmp_path)
         result = renderer.render({}, extension="flac")
-        assert result == tmp_path / "Unknown Artist" / "Unknown Album" / "00 - Unknown Title.flac"
+        assert (
+            result
+            == tmp_path / "Unknown Artist" / "Unknown Album" / "00 - Unknown Title.flac"
+        )
 
     def test_album_artist_falls_back_to_artist(self, tmp_path):
         renderer = PathRenderer(tmp_path)
@@ -39,7 +42,12 @@ class TestPathRenderer:
 
     def test_collision_gets_numbered_suffix(self, tmp_path):
         renderer = PathRenderer(tmp_path)
-        fields = {"artist": "A", "album": "B", "title": "Same Title", "track_number": "1"}
+        fields = {
+            "artist": "A",
+            "album": "B",
+            "title": "Same Title",
+            "track_number": "1",
+        }
         first = renderer.render(fields, extension="mp3")
         first.parent.mkdir(parents=True, exist_ok=True)
         first.write_bytes(b"fake")
@@ -51,10 +59,12 @@ class TestPathRenderer:
     def test_directory_casing_stays_consistent_within_a_run(self, tmp_path):
         renderer = PathRenderer(tmp_path)
         first = renderer.render(
-            {"artist": "Artist Name", "album": "Album", "title": "Track One"}, extension="mp3"
+            {"artist": "Artist Name", "album": "Album", "title": "Track One"},
+            extension="mp3",
         )
         second = renderer.render(
-            {"artist": "artist name", "album": "Album", "title": "Track Two"}, extension="mp3"
+            {"artist": "artist name", "album": "Album", "title": "Track Two"},
+            extension="mp3",
         )
         # Same directory intent despite differing case -- must resolve to the
         # same actual folder, avoiding a split that would only occur on Linux.

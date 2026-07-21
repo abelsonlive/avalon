@@ -37,9 +37,13 @@ logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="avalon", description="Audio analysis, tagging, and organization")
+    parser = argparse.ArgumentParser(
+        prog="avalon", description="Audio analysis, tagging, and organization"
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose (info) logging")
+    parser.add_argument(
+        "-v", "--verbose", action="store_true", help="Enable verbose (info) logging"
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     _add_pipeline_flags(_add_analyze_parser(subparsers))
@@ -49,25 +53,55 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _add_analyze_parser(subparsers) -> argparse.ArgumentParser:
-    parser = subparsers.add_parser("analyze", help="Analyze/tag/convert a file or folder")
-    parser.add_argument("sources", nargs="+", help="Audio file(s) or folder(s) to process")
-    parser.add_argument("--recursive", action="store_true", help="Recurse into subfolders")
-    parser.add_argument("--dry-run", action="store_true", help="Show what would happen without writing anything")
+    parser = subparsers.add_parser(
+        "analyze", help="Analyze/tag/convert a file or folder"
+    )
+    parser.add_argument(
+        "sources", nargs="+", help="Audio file(s) or folder(s) to process"
+    )
+    parser.add_argument(
+        "--recursive", action="store_true", help="Recurse into subfolders"
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would happen without writing anything",
+    )
     parser.set_defaults(func=run_analyze)
     return parser
 
 
 def _add_watch_parser(subparsers) -> argparse.ArgumentParser:
-    parser = subparsers.add_parser("watch", help="Watch folder(s) and process new/changed files")
+    parser = subparsers.add_parser(
+        "watch", help="Watch folder(s) and process new/changed files"
+    )
     parser.add_argument("sources", nargs="+", help="Folder(s) to watch")
-    parser.add_argument("--debounce-seconds", type=int, default=5, help="Quiet period before processing a file (default: 5)")
-    parser.add_argument("--no-backfill", action="store_true", help="Skip processing pre-existing files on startup")
+    parser.add_argument(
+        "--debounce-seconds",
+        type=int,
+        default=5,
+        help="Quiet period before processing a file (default: 5)",
+    )
+    parser.add_argument(
+        "--no-backfill",
+        action="store_true",
+        help="Skip processing pre-existing files on startup",
+    )
     parser.set_defaults(func=run_watch)
     return parser
 
 
+def _headline_fields_type(raw: str) -> tuple[str, ...]:
+    try:
+        return analysis_blob.parse_headline_fields(raw)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
 def _add_pipeline_flags(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--dest", type=str, default=None, help="Destination root; omit to tag in place")
+    parser.add_argument(
+        "--dest", type=str, default=None, help="Destination root; omit to tag in place"
+    )
     parser.add_argument("--path-template", type=str, default=DEFAULT_TEMPLATE)
     parser.add_argument(
         "--convert-lossless-to",
@@ -78,23 +112,61 @@ def _add_pipeline_flags(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--max-sample-rate", type=int, default=None)
     parser.add_argument("--max-bit-depth", type=int, default=None)
-    parser.add_argument("--no-analyze", action="store_true", help="Skip essentia analysis")
-    parser.add_argument("--no-convert", action="store_true", help="Skip format/rate/depth conversion")
-    parser.add_argument("--force-reanalyze", action="store_true", help="Re-run analysis even if already current")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing destination files")
-    parser.add_argument("--overwrite-description", action="store_true", help="Replace the headline tag instead of merging into it")
-    parser.add_argument("--delete-original", action="store_true", help="Delete the source file after successful processing")
+    parser.add_argument(
+        "--no-analyze", action="store_true", help="Skip essentia analysis"
+    )
+    parser.add_argument(
+        "--no-convert", action="store_true", help="Skip format/rate/depth conversion"
+    )
+    parser.add_argument(
+        "--force-reanalyze",
+        action="store_true",
+        help="Re-run analysis even if already current",
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing destination files"
+    )
+    parser.add_argument(
+        "--overwrite-description",
+        action="store_true",
+        help="Replace the headline tag instead of merging into it",
+    )
+    parser.add_argument(
+        "--headline-tag",
+        type=str,
+        default=None,
+        help="Tag/field name to write the headline to (default: COMM for MP3/AIFF/WAV, "
+        "DESCRIPTION for FLAC, desc for MP4). A name other than the default becomes a "
+        "TXXX frame (ID3-family) or freeform atom (MP4) rather than the native comment field",
+    )
+    parser.add_argument(
+        "--headline-format",
+        type=_headline_fields_type,
+        default=analysis_blob.DEFAULT_HEADLINE_FIELDS,
+        help="Comma-separated fields (and order) for the headline tag. Available: "
+        f"{', '.join(analysis_blob.HEADLINE_FIELD_VALUES)} "
+        f"(default: {','.join(analysis_blob.DEFAULT_HEADLINE_FIELDS)})",
+    )
+    parser.add_argument(
+        "--delete-original",
+        action="store_true",
+        help="Delete the source file after successful processing",
+    )
 
 
 def _add_inspect_parser(subparsers) -> None:
-    parser = subparsers.add_parser("inspect", help="Show a file's parsed canonical + analysis tags")
+    parser = subparsers.add_parser(
+        "inspect", help="Show a file's parsed canonical + analysis tags"
+    )
     parser.add_argument("path", help="Audio file to inspect")
     parser.set_defaults(func=run_inspect)
 
 
 def setup_logging(debug: bool, verbose: bool) -> None:
     level = logging.DEBUG if debug else (logging.INFO if verbose else logging.WARNING)
-    logging.basicConfig(level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    logging.basicConfig(
+        level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
 
 
 # -------- File discovery --------
@@ -112,7 +184,9 @@ def gather_files(sources: list[str], recursive: bool) -> list[Path]:
             logger.warning("Source not found: %s", path)
             continue
         walker = path.rglob("*") if recursive else path.glob("*")
-        files.extend(p for p in walker if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS)
+        files.extend(
+            p for p in walker if p.is_file() and p.suffix.lower() in AUDIO_EXTENSIONS
+        )
     return sorted(files)
 
 
@@ -136,6 +210,8 @@ def _pipeline_options_from_args(args: argparse.Namespace) -> PipelineOptions:
         force_reanalyze=args.force_reanalyze,
         overwrite=args.overwrite,
         overwrite_description=args.overwrite_description,
+        headline_tag=args.headline_tag,
+        headline_fields=args.headline_format,
         delete_original=args.delete_original,
         dry_run=getattr(args, "dry_run", False),
     )
@@ -252,7 +328,10 @@ def run_inspect(args: argparse.Namespace) -> int:
         for field in ("genre", "moodtheme"):
             labels = analysis_blob.decode_extended_labels(extended, field)
             if labels:
-                print(f"  {field} labels: " + ", ".join(f"{l.name} ({l.confidence:.2f})" for l in labels))
+                print(
+                    f"  {field} labels: "
+                    + ", ".join(f"{l.name} ({l.confidence:.2f})" for l in labels)
+                )
     return 0
 
 

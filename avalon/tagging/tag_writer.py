@@ -36,7 +36,15 @@ _MUTAGEN_CLASS = {
 }
 
 CANONICAL_READ_FIELDS = (
-    "title", "artist", "album", "album_artist", "track_number", "date", "genre", "bpm", "key",
+    "title",
+    "artist",
+    "album",
+    "album_artist",
+    "track_number",
+    "date",
+    "genre",
+    "bpm",
+    "key",
 )
 
 
@@ -77,7 +85,9 @@ def read_canonical(audio, file_format: FileFormat) -> dict[str, str]:
 
 
 def _read_id3_canonical(audio) -> dict[str, str]:
-    frames = TAG_FRAME_MAPS[FileFormat.MP3]  # frame names identical across the ID3 family
+    frames = TAG_FRAME_MAPS[
+        FileFormat.MP3
+    ]  # frame names identical across the ID3 family
     result = {}
     for field in CANONICAL_READ_FIELDS:
         frame_id = getattr(frames, field)
@@ -182,30 +192,62 @@ def _write_mp4_generated(audio, values: dict[str, str]) -> None:
 # ---- headline + extended analysis tags ----
 
 
-def read_headline(audio, file_format: FileFormat) -> str | None:
-    frames = TAG_FRAME_MAPS[file_format]
+def _headline_frame_id(file_format: FileFormat, tag_name: str) -> str:
+    """Resolves a user-chosen `--headline-tag` name to a concrete frame/atom
+    id. The format's native comment slot (COMM for ID3-family, `desc` for
+    MP4) is used verbatim when requested; any other name becomes a TXXX
+    frame (ID3-family) or freeform atom (MP4) instead, mirroring how the
+    extended tag already works. FLAC Vorbis comments have no special native
+    slot, so any name is just used directly as the field key."""
     if file_format in ID3_FAMILY:
-        # COMM frames are keyed by (desc, lang), e.g. "COMM::eng" -- not the
-        # plain "COMM" this maps to, so a direct .get() would always miss.
-        comments = audio.tags.getall(frames.headline)
-        return str(comments[0].text[0]) if comments and comments[0].text else None
-    if file_format is FileFormat.FLAC:
-        values = audio.tags.get(frames.headline) if audio.tags else None
-        return str(values[0]) if values else None
-    values = audio.tags.get(frames.headline) if audio.tags else None
+        return "COMM" if tag_name.upper() == "COMM" else f"TXXX:{tag_name}"
+    if file_format is FileFormat.MP4:
+        return "desc" if tag_name == "desc" else f"----:com.avalon:{tag_name}"
+    return tag_name
+
+
+def read_headline(
+    audio, file_format: FileFormat, tag_name: str | None = None
+) -> str | None:
+    frames = TAG_FRAME_MAPS[file_format]
+    frame_id = _headline_frame_id(file_format, tag_name or frames.headline)
+    if file_format in ID3_FAMILY:
+        if frame_id == "COMM":
+            # COMM frames are keyed by (desc, lang), e.g. "COMM::eng" -- not
+            # the plain "COMM" this maps to, so a direct .get() would miss.
+            comments = audio.tags.getall("COMM")
+            return str(comments[0].text[0]) if comments and comments[0].text else None
+        frame = audio.tags.get(frame_id)
+        return str(frame.text[0]) if frame and frame.text else None
+    if file_format is FileFormat.MP4:
+        values = audio.tags.get(frame_id) if audio.tags else None
+        if not values:
+            return None
+        return str(values[0]) if frame_id == "desc" else values[0].decode("utf-8")
+    values = audio.tags.get(frame_id) if audio.tags else None
     return str(values[0]) if values else None
 
 
-def write_headline(audio, file_format: FileFormat, value: str) -> None:
+def write_headline(
+    audio, file_format: FileFormat, value: str, tag_name: str | None = None
+) -> None:
     frames = TAG_FRAME_MAPS[file_format]
+    frame_id = _headline_frame_id(file_format, tag_name or frames.headline)
     if file_format in ID3_FAMILY:
-        for existing_key in [k for k in audio.tags.keys() if k.startswith("COMM")]:
-            del audio.tags[existing_key]
-        audio.tags.add(COMM(encoding=3, lang="eng", desc="", text=value))
-    elif file_format is FileFormat.FLAC:
-        audio.tags[frames.headline] = [value]
+        if frame_id == "COMM":
+            for existing_key in [k for k in audio.tags.keys() if k.startswith("COMM")]:
+                del audio.tags[existing_key]
+            audio.tags.add(COMM(encoding=3, lang="eng", desc="", text=value))
+        else:
+            _, _, description = frame_id.partition(":")
+            audio.tags.add(TXXX(encoding=3, desc=description, text=value))
+    elif file_format is FileFormat.MP4:
+        if frame_id == "desc":
+            audio.tags[frame_id] = [value]
+        else:
+            audio.tags[frame_id] = value.encode("utf-8")
     else:
-        audio.tags[frames.headline] = [value]
+        audio.tags[frame_id] = [value]
 
 
 def read_extended(audio, file_format: FileFormat) -> str | None:

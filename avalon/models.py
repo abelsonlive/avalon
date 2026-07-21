@@ -39,7 +39,9 @@ class TrackAnalysis:
     mood_acoustic: float
     mood_electronic: float
     voice_probability: float  # P(has vocals), 0-1
-    gender: str | None  # "male" / "female" -- only meaningful when voice_probability is high
+    gender: (
+        str | None
+    )  # "male" / "female" -- only meaningful when voice_probability is high
     gender_confidence: float
     tonal_probability: float  # P(tonal) vs atonal, 0-1
     timbre: str  # "bright" / "dark"

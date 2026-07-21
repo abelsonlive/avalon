@@ -69,14 +69,18 @@ class PathRenderer:
             resolved.append(canonical)
         return resolved
 
-    def render(self, fields: dict[str, str], extension: str, allow_overwrite: bool = False) -> Path:
+    def render(
+        self, fields: dict[str, str], extension: str, allow_overwrite: bool = False
+    ) -> Path:
         """`allow_overwrite=True` returns the natural path even if it already
         exists (the caller intends to replace it -- e.g. reprocessing the
         same source on a later run). Otherwise an existing path is a genuine
         collision and gets a numbered suffix rather than being clobbered."""
         context = {
             "artist": fields.get("artist") or UNKNOWN_ARTIST,
-            "album_artist": fields.get("album_artist") or fields.get("artist") or UNKNOWN_ARTIST,
+            "album_artist": fields.get("album_artist")
+            or fields.get("artist")
+            or UNKNOWN_ARTIST,
             "album": fields.get("album") or UNKNOWN_ALBUM,
             "title": fields.get("title") or UNKNOWN_TITLE,
             "track": _track_number(fields.get("track_number")),

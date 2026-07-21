@@ -17,15 +17,31 @@ import ffmpeg
 
 logger = logging.getLogger(__name__)
 
-_PCM_CODEC_BY_BIT_DEPTH = {8: "pcm_u8", 16: "pcm_s16le", 24: "pcm_s24le", 32: "pcm_s32le"}
+_PCM_CODEC_BY_BIT_DEPTH = {
+    8: "pcm_u8",
+    16: "pcm_s16le",
+    24: "pcm_s24le",
+    32: "pcm_s32le",
+}
 _PCM_CONTAINER_FORMATS = {"aiff", "wav"}
 
 # Codec, not container: M4A can hold either lossy AAC or lossless ALAC, so
 # the file extension alone can't tell you which.
 _LOSSLESS_CODECS = {
-    "flac", "alac", "ape", "wavpack", "tta",
-    "pcm_s8", "pcm_u8", "pcm_s16le", "pcm_s16be",
-    "pcm_s24le", "pcm_s24be", "pcm_s32le", "pcm_s32be", "pcm_f32le",
+    "flac",
+    "alac",
+    "ape",
+    "wavpack",
+    "tta",
+    "pcm_s8",
+    "pcm_u8",
+    "pcm_s16le",
+    "pcm_s16be",
+    "pcm_s24le",
+    "pcm_s24be",
+    "pcm_s32le",
+    "pcm_s32be",
+    "pcm_f32le",
 }
 
 
@@ -53,7 +69,9 @@ def probe(path: str) -> dict[str, Any]:
     return {
         "sample_rate": int(stream.get("sample_rate", 0)),
         "bit_depth": int(stream.get("bits_per_sample", 0)) or None,
-        "bit_rate": (int(stream.get("bit_rate", 0)) // 1000) if stream.get("bit_rate") else None,
+        "bit_rate": (int(stream.get("bit_rate", 0)) // 1000)
+        if stream.get("bit_rate")
+        else None,
         "codec_name": stream.get("codec_name"),
         "duration": float(info.get("format", {}).get("duration", 0)) or None,
     }
@@ -116,14 +134,20 @@ def convert(
         audio_params["ar"] = max_sample_rate
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    kwargs: dict[str, Any] = dict(map_metadata=0, write_id3v2=1, map="0:a:0", **audio_params)
+    kwargs: dict[str, Any] = dict(
+        map_metadata=0, write_id3v2=1, map="0:a:0", **audio_params
+    )
     if target_format == "aiff":
         kwargs["f"] = "aiff"
 
     output_stream = ffmpeg.output(ffmpeg.input(input_path), output_path, **kwargs)
     try:
         ffmpeg.run(
-            output_stream, overwrite_output=True, quiet=True, capture_stdout=True, capture_stderr=True
+            output_stream,
+            overwrite_output=True,
+            quiet=True,
+            capture_stdout=True,
+            capture_stderr=True,
         )
     except ffmpeg.Error as exc:
         stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
