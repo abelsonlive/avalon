@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "libavalon"
-version = "0.0.1"
+version = "0.0.2"
 description = "Standalone audio analysis, tagging, and organization CLI"
 readme = "README.md"
 license = { text = "MIT" }

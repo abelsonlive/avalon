@@ -83,14 +83,52 @@ def _cache_dir() -> Path:
     return path
 
 
+_MAX_DOWNLOAD_ATTEMPTS = 5
+
+
 def _download(url: str, dest: Path) -> None:
+    """Streams to a .part file (instead of buffering the whole response in
+    memory) and resumes via an HTTP Range header on retry -- essentia.upf.edu
+    is a single, non-CDN origin whose sustained transfer speed can swing from
+    ~10KB/s to ~300KB/s between back-to-back requests for the same file,
+    though it always accepts the connection and starts responding quickly.
+    Without resume, a stall at (say) 7 of 18MB would discard that progress
+    and retry from zero every time -- on a link this variable that can mean
+    it never finishes."""
     if dest.exists():
         return
     logger.info("Downloading model file %s", url)
-    response = requests.get(url, timeout=60)
-    response.raise_for_status()
     tmp = dest.with_suffix(dest.suffix + ".part")
-    tmp.write_bytes(response.content)
+    for attempt in range(1, _MAX_DOWNLOAD_ATTEMPTS + 1):
+        resume_from = tmp.stat().st_size if tmp.exists() else 0
+        headers = {"Range": f"bytes={resume_from}-"} if resume_from else {}
+        try:
+            # (connect, read) timeouts: connect/TLS/first-byte are fast even
+            # when this server is throttling (seen: <1s), so a short connect
+            # timeout is fine, but reads need a lot of slack for slow windows.
+            with requests.get(
+                url, timeout=(10, 120), stream=True, headers=headers
+            ) as response:
+                if resume_from and response.status_code == 200:
+                    # Server ignored the Range request -- restart clean.
+                    resume_from = 0
+                response.raise_for_status()
+                mode = "ab" if resume_from else "wb"
+                with open(tmp, mode) as fh:
+                    for chunk in response.iter_content(chunk_size=1 << 16):
+                        fh.write(chunk)
+            break
+        except requests.exceptions.RequestException as exc:
+            if attempt == _MAX_DOWNLOAD_ATTEMPTS:
+                raise
+            logger.warning(
+                "Download attempt %d/%d for %s failed (%s), resuming from byte %d",
+                attempt,
+                _MAX_DOWNLOAD_ATTEMPTS,
+                url,
+                exc,
+                tmp.stat().st_size if tmp.exists() else 0,
+            )
     tmp.rename(dest)
 
 
