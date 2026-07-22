@@ -7,52 +7,6 @@ resolution-markers = [
 ]
 
 [[package]]
-name = "avalon-audio"
-version = "0.0.2"
-source = { editable = "." }
-dependencies = [
-    { name = "essentia-tensorflow" },
-    { name = "ffmpeg-python" },
-    { name = "mutagen" },
-    { name = "numpy" },
-    { name = "requests" },
-    { name = "watchdog" },
-]
-
-[package.optional-dependencies]
-test = [
-    { name = "pytest" },
-    { name = "pytest-cov" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "build" },
-    { name = "ruff" },
-    { name = "twine" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "essentia-tensorflow", specifier = "==2.1b6.dev1110" },
-    { name = "ffmpeg-python", specifier = ">=0.2.0" },
-    { name = "mutagen", specifier = ">=1.48.0" },
-    { name = "numpy", specifier = "<2" },
-    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
-    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4.0.0" },
-    { name = "requests", specifier = ">=2.31.0" },
-    { name = "watchdog", specifier = ">=6.0.0" },
-]
-provides-extras = ["test"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "build", specifier = ">=1.0.0" },
-    { name = "ruff", specifier = ">=0.6.0" },
-    { name = "twine", specifier = ">=5.0.0" },
-]
-
-[[package]]
 name = "backports-tarfile"
 version = "1.2.0"
 source = { registry = "https://pypi.org/simple" }
@@ -401,6 +355,52 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/43/4b/674af6ef2f97d56f0ab5153bf0bfa28ccb6c3ed4d1babf4305449668807b/keyring-25.7.0.tar.gz", hash = "sha256:fe01bd85eb3f8fb3dd0405defdeac9a5b4f6f0439edbb3149577f244a2e8245b", size = 63516 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/81/db/e655086b7f3a705df045bf0933bdd9c2f79bb3c97bfef1384598bb79a217/keyring-25.7.0-py3-none-any.whl", hash = "sha256:be4a0b195f149690c166e850609a477c532ddbfbaed96a404d4e43f8d5e2689f", size = 39160 },
+]
+
+[[package]]
+name = "libavalon"
+version = "0.0.1"
+source = { editable = "." }
+dependencies = [
+    { name = "essentia-tensorflow" },
+    { name = "ffmpeg-python" },
+    { name = "mutagen" },
+    { name = "numpy" },
+    { name = "requests" },
+    { name = "watchdog" },
+]
+
+[package.optional-dependencies]
+test = [
+    { name = "pytest" },
+    { name = "pytest-cov" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "build" },
+    { name = "ruff" },
+    { name = "twine" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "essentia-tensorflow", specifier = "==2.1b6.dev1110" },
+    { name = "ffmpeg-python", specifier = ">=0.2.0" },
+    { name = "mutagen", specifier = ">=1.48.0" },
+    { name = "numpy", specifier = "<2" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.0.0" },
+    { name = "pytest-cov", marker = "extra == 'test'", specifier = ">=4.0.0" },
+    { name = "requests", specifier = ">=2.31.0" },
+    { name = "watchdog", specifier = ">=6.0.0" },
+]
+provides-extras = ["test"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "build", specifier = ">=1.0.0" },
+    { name = "ruff", specifier = ">=0.6.0" },
+    { name = "twine", specifier = ">=5.0.0" },
 ]
 
 [[package]]

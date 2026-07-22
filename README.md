@@ -24,7 +24,7 @@ uv sync
 OR 
 
 ```shell
-pip install avalon-audio
+pip install libavalon
 ```
 
 First run downloads Essentia's models (~26.5MB) to `~/.cache/avalon/models/`.
