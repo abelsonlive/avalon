@@ -1,18 +1,10 @@
-"""Pipeline-integration tests for --identify. Essentia is never invoked
-here (too heavy to fake cheaply for a real analysis, and unnecessary --
-these tests fake both `Pipeline._analyzer` and `Pipeline._identity_resolver`
-directly, the same lazy-construction attributes `_get_analyzer()`/
-`_get_identity_resolver()` check before building the real thing, achieving
-dependency injection without any monkeypatching machinery).
-"""
-
+import pickle
 import shutil
 from pathlib import Path
 
-
-from avalon.models import Label, TrackAnalysis, TrackIdentity
+from avalon.models import Label, TrackAnalysis
 from avalon.pipeline import Pipeline, PipelineOptions
-from avalon.tagging import identity_blob, tag_writer
+from avalon.tagging import analysis_blob, tag_writer
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -54,25 +46,6 @@ def _sample_analysis(**overrides) -> TrackAnalysis:
     return TrackAnalysis(**defaults)
 
 
-def _sample_identity(**overrides) -> TrackIdentity:
-    defaults = dict(
-        musicbrainz_recording_id="rec-1",
-        musicbrainz_release_id="rel-1",
-        musicbrainz_artist_id="artist-1",
-        discogs_release_id="10817694",
-        acoustid_id="acoustid-1",
-        match_confidence=0.93,
-        isrc="USGF19942501",
-        release_date="1991-09-24",
-        release_country="US",
-        label="DGC Records",
-        catalog_number="DGC-24425",
-        genre="Rock / Grunge",
-    )
-    defaults.update(overrides)
-    return TrackIdentity(**defaults)
-
-
 class FakeAnalyzer:
     def __init__(self, analysis: TrackAnalysis):
         self._analysis = analysis
@@ -83,160 +56,76 @@ class FakeAnalyzer:
         return self._analysis
 
 
-class FakeResolver:
-    def __init__(
-        self, identity: TrackIdentity | None = None, exc: Exception | None = None
-    ):
-        self._identity = identity
-        self._exc = exc
-        self.calls = 0
-
-    def resolve(self, path: str, existing_fields: dict) -> TrackIdentity:
-        self.calls += 1
-        if self._exc:
-            raise self._exc
-        return self._identity
-
-
-class TestIdentifyOffByDefault:
-    def test_no_credentials_needed_when_identify_not_requested(self, tmp_path):
-        path = _copy_fixture("test.mp3", tmp_path)
+class TestPlanAndExecuteSplit:
+    def test_process_file_equals_plan_then_process_planned(self, tmp_path):
+        path = _copy_fixture("test.m4a", tmp_path)
         pipeline = Pipeline(PipelineOptions(do_analyze=False, do_convert=False))
-        result = pipeline.process_file(path)
+        planned = pipeline.plan(path)
+        result = pipeline.process_planned(planned)
         assert result.error is None
-        assert result.identified is False
+        assert result.output_path == path
+
+    def test_plan_failure_is_reported_without_raising(self, tmp_path):
+        pipeline = Pipeline(PipelineOptions(do_analyze=False, do_convert=False))
+        result = pipeline.process_file(str(tmp_path / "does-not-exist.mp3"))
+        assert result.error is not None
 
 
-class TestIdentifyWritesTags:
-    def test_end_to_end(self, tmp_path):
+class TestPlannedFileIsPicklable:
+    def test_survives_a_pickle_round_trip(self, tmp_path):
         path = _copy_fixture("test.m4a", tmp_path)
-        pipeline = Pipeline(
-            PipelineOptions(do_analyze=False, do_convert=False, do_identify=True)
-        )
-        pipeline._identity_resolver = FakeResolver(identity=_sample_identity())
-
-        result = pipeline.process_file(path)
-        assert result.error is None
-        assert result.identified is True
-
-        fmt = tag_writer.detect_format(path)
-        audio = tag_writer.load(path, fmt)
-        identity_fields = tag_writer.read_identity_fields(audio, fmt)
-        assert identity_fields["musicbrainz_recording_id"] == "rec-1"
-        assert identity_fields["discogs_release_id"] == "10817694"
-
-        raw = tag_writer.read_identity_extended(audio, fmt)
-        assert identity_blob.has_current_schema(raw) is True
+        pipeline = Pipeline(PipelineOptions(do_analyze=False, do_convert=False))
+        planned = pipeline.plan(path)
+        assert pickle.loads(pickle.dumps(planned)) == planned
 
 
-class TestGenrePrecedence:
-    def test_identity_genre_beats_essentia_guess_when_genre_missing(self, tmp_path):
-        path = _copy_fixture("test.m4a", tmp_path)
-        pipeline = Pipeline(
-            PipelineOptions(do_analyze=True, do_convert=False, do_identify=True)
-        )
-        pipeline._analyzer = FakeAnalyzer(_sample_analysis())
-        pipeline._identity_resolver = FakeResolver(
-            identity=_sample_identity(genre="Rock / Grunge")
-        )
-
-        fmt = tag_writer.detect_format(path)
-        before_genre = tag_writer.read_canonical(tag_writer.load(path, fmt), fmt).get(
-            "genre"
-        )
-
-        result = pipeline.process_file(path)
-        assert result.error is None
-
-        after = tag_writer.read_canonical(tag_writer.load(path, fmt), fmt)
-        if before_genre:
-            assert after["genre"] == before_genre
-        else:
-            assert after["genre"] == "Rock / Grunge"
-            assert after["genre"] != "Essentia Guessed Genre"
-
-    def test_essentia_guess_used_when_no_identity_genre(self, tmp_path):
-        path = _copy_fixture("test.m4a", tmp_path)
-        pipeline = Pipeline(
-            PipelineOptions(do_analyze=True, do_convert=False, do_identify=True)
-        )
-        pipeline._analyzer = FakeAnalyzer(_sample_analysis())
-        pipeline._identity_resolver = FakeResolver(
-            identity=_sample_identity(genre=None)
-        )
-
-        fmt = tag_writer.detect_format(path)
-        before_genre = tag_writer.read_canonical(tag_writer.load(path, fmt), fmt).get(
-            "genre"
-        )
-
-        pipeline.process_file(path)
-
-        after = tag_writer.read_canonical(tag_writer.load(path, fmt), fmt)
-        if not before_genre:
-            assert after["genre"] == "Essentia Guessed Genre"
-
-
-class TestForceReidentify:
+class TestForceReanalyze:
     def test_skips_when_already_current(self, tmp_path):
         path = _copy_fixture("test.m4a", tmp_path)
         fmt = tag_writer.detect_format(path)
         audio = tag_writer.load(path, fmt)
-        tag_writer.write_identity_extended(
-            audio, fmt, identity_blob.encode_identity(_sample_identity())
+        tag_writer.write_extended(
+            audio, fmt, analysis_blob.encode_extended(_sample_analysis())
         )
         tag_writer.save(audio)
 
-        pipeline = Pipeline(
-            PipelineOptions(do_analyze=False, do_convert=False, do_identify=True)
-        )
-        resolver = FakeResolver(identity=_sample_identity())
-        pipeline._identity_resolver = resolver
+        pipeline = Pipeline(PipelineOptions(do_analyze=True, do_convert=False))
+        analyzer = FakeAnalyzer(_sample_analysis())
+        pipeline._analyzer = analyzer
 
         result = pipeline.process_file(path)
-        assert resolver.calls == 0
-        assert result.identified is False
+        assert analyzer.calls == 0
+        assert result.analyzed is False
 
-    def test_force_reidentify_runs_anyway(self, tmp_path):
+    def test_force_reanalyze_runs_anyway(self, tmp_path):
         path = _copy_fixture("test.m4a", tmp_path)
         fmt = tag_writer.detect_format(path)
         audio = tag_writer.load(path, fmt)
-        tag_writer.write_identity_extended(
-            audio, fmt, identity_blob.encode_identity(_sample_identity())
+        tag_writer.write_extended(
+            audio, fmt, analysis_blob.encode_extended(_sample_analysis())
         )
         tag_writer.save(audio)
 
         pipeline = Pipeline(
-            PipelineOptions(
-                do_analyze=False,
-                do_convert=False,
-                do_identify=True,
-                force_reidentify=True,
-            )
+            PipelineOptions(do_analyze=True, do_convert=False, force_reanalyze=True)
         )
-        resolver = FakeResolver(identity=_sample_identity())
-        pipeline._identity_resolver = resolver
+        analyzer = FakeAnalyzer(_sample_analysis())
+        pipeline._analyzer = analyzer
 
         result = pipeline.process_file(path)
-        assert resolver.calls == 1
-        assert result.identified is True
+        assert analyzer.calls == 1
+        assert result.analyzed is True
 
 
-class TestIdentifyFailureIsolation:
-    def test_transient_identify_error_does_not_abort_the_file(self, tmp_path):
+class TestDryRun:
+    def test_dry_run_does_not_write_anything(self, tmp_path):
         path = _copy_fixture("test.m4a", tmp_path)
+        before = Path(path).read_bytes()
         pipeline = Pipeline(
-            PipelineOptions(do_analyze=True, do_convert=False, do_identify=True)
+            PipelineOptions(do_analyze=True, do_convert=False, dry_run=True)
         )
         pipeline._analyzer = FakeAnalyzer(_sample_analysis())
-        pipeline._identity_resolver = FakeResolver(exc=RuntimeError("network timeout"))
 
         result = pipeline.process_file(path)
-
-        assert result.error is None
-        assert result.analyzed is True
-        assert result.identified is False
-
-        fmt = tag_writer.detect_format(path)
-        extended = tag_writer.read_extended(tag_writer.load(path, fmt), fmt)
-        assert extended is not None
+        assert result.skipped_reason == "dry-run"
+        assert Path(path).read_bytes() == before

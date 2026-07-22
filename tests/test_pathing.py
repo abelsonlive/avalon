@@ -74,3 +74,32 @@ class TestPathRenderer:
             {"artist": "A", "title": "T", "genre": "Techno"}, extension="wav"
         )
         assert result == tmp_path / "Techno" / "A" / "T.wav"
+
+
+class TestPathRendererSanitizesFieldValues:
+    def test_slash_in_a_field_does_not_create_extra_directories(self, tmp_path):
+        renderer = PathRenderer(tmp_path)
+        fields = {
+            "album_artist": "Andrew Weatherall",
+            "album": "ANDREW WEATHERALL / TWO LONE SWORDSMEN / SABRES OF PARADISE",
+            "title": "Conquistador",
+            "track_number": "63",
+        }
+        result = renderer.render(fields, extension="mp3")
+        assert result == (
+            tmp_path
+            / "Andrew Weatherall"
+            / "ANDREW WEATHERALL _ TWO LONE SWORDSMEN _ SABRES OF PARADISE"
+            / "63 - Conquistador.mp3"
+        )
+
+    def test_period_in_title_is_not_mistaken_for_an_extension(self, tmp_path):
+        renderer = PathRenderer(tmp_path)
+        fields = {
+            "album_artist": "Andrew Weatherall",
+            "album": "Etc",
+            "title": "Conquistador (Sabres of Paradise No.3 Mix)",
+            "track_number": "63",
+        }
+        result = renderer.render(fields, extension="mp3")
+        assert result.name == "63 - Conquistador (Sabres of Paradise No.3 Mix).mp3"

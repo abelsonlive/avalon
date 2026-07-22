@@ -74,9 +74,11 @@ class EssentiaAnalyzer:
         key, scale, key_strength = es.KeyExtractor()(rhythm_audio)
         dynamic_complexity, loudness = es.DynamicComplexity()(rhythm_audio)
 
-        embedding_audio = es.MonoLoader(
-            filename=path, sampleRate=_EMBEDDING_SAMPLE_RATE, resampleQuality=4
-        )()
+        embedding_audio = es.Resample(
+            inputSampleRate=_ANALYSIS_SAMPLE_RATE,
+            outputSampleRate=_EMBEDDING_SAMPLE_RATE,
+            quality=4,
+        )(rhythm_audio)
         embeddings = self._embedding_algo(embedding_audio)
 
         binary_probs: dict[str, float] = {}

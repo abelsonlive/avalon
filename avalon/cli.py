@@ -1,33 +1,19 @@
-"""Command-line interface for avalon.
-
-Subcommands:
-  - analyze: single execution over a file or folder (optionally recursive)
-  - watch:   daemon mode, watches folders and reacts to new/changed files
-  - inspect: dumps a file's parsed tags for debugging
-
-`analyze` and `watch` both funnel through the same `Pipeline.process_file`
-(see pipeline.py) so there is exactly one place that knows the pipeline
-order.
-
-Note: essentia analysis runs sequentially (no `--workers` parallelism).
-Concurrent calls into a shared, warm TensorFlow session are not something
-this has been verified safe for, and a silent data race is worse than a
-slower single-threaded run -- measured at ~1-2s/track once models are
-warm, which is tractable even for large libraries.
-"""
-
 from __future__ import annotations
 
 import argparse
 import logging
+import os
+import random
 import sys
+from collections.abc import Callable, Iterator
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from pathlib import Path
 
 from avalon.constants import AUDIO_EXTENSIONS
-from avalon.identity import credentials as identity_credentials
+from avalon.models import ProcessResult
 from avalon.pathing import DEFAULT_TEMPLATE
-from avalon.pipeline import Pipeline, PipelineOptions
-from avalon.tagging import analysis_blob, identity_blob, tag_writer
+from avalon.pipeline import Pipeline, PipelineOptions, init_worker, process_planned_in_worker
+from avalon.tagging import analysis_blob, tag_writer
 from avalon import state as state_module
 from avalon import watcher
 
@@ -65,6 +51,21 @@ def _add_analyze_parser(subparsers) -> argparse.ArgumentParser:
         action="store_true",
         help="Show what would happen without writing anything",
     )
+    parser.add_argument(
+        "--random",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Process a random sample of N files instead of everything found "
+        "(fast, repeatable smoke-testing on a large library)",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Process N files concurrently in separate worker processes (default: 1, sequential)",
+    )
     parser.set_defaults(func=run_analyze)
     return parser
 
@@ -92,13 +93,6 @@ def _add_watch_parser(subparsers) -> argparse.ArgumentParser:
 def _headline_fields_type(raw: str) -> tuple[str, ...]:
     try:
         return analysis_blob.parse_headline_fields(raw)
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError(str(exc)) from exc
-
-
-def _min_confidence_type(raw: str) -> float:
-    try:
-        return identity_credentials.parse_min_confidence(raw)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from exc
 
@@ -153,24 +147,6 @@ def _add_pipeline_flags(parser: argparse.ArgumentParser) -> None:
         f"(default: {','.join(analysis_blob.DEFAULT_HEADLINE_FIELDS)})",
     )
     parser.add_argument(
-        "--identify",
-        action="store_true",
-        help="Reconcile against MusicBrainz/Discogs (fingerprint via AcoustID). Off by "
-        "default -- requires the ACOUSTID_API_KEY and/or DISCOGS_TOKEN environment "
-        "variable(s); errors if --identify is passed but neither is set",
-    )
-    parser.add_argument(
-        "--force-reidentify",
-        action="store_true",
-        help="Re-run --identify even if already current",
-    )
-    parser.add_argument(
-        "--min-identify-confidence",
-        type=_min_confidence_type,
-        default=0.7,
-        help="Minimum AcoustID match score (0-1) to trust a fingerprint match (default: 0.7)",
-    )
-    parser.add_argument(
         "--delete-original",
         action="store_true",
         help="Delete the source file after successful processing",
@@ -190,40 +166,57 @@ def setup_logging(debug: bool, verbose: bool) -> None:
     logging.basicConfig(
         level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
-    # urllib3 logs full request lines (incl. query params) at DEBUG -- the
-    # Discogs client authenticates via a `token=` query param, so --debug
-    # must never drop this logger's floor below INFO or it leaks credentials.
     logging.getLogger("urllib3").setLevel(logging.INFO)
 
 
 def _is_audio_file(path: Path) -> bool:
-    """Excludes macOS AppleDouble sidecar files (`._track.mp3`), which SMB/
-    NFS/FAT shares cause macOS to create for extended attributes a native
-    filesystem would store inline -- these carry no real audio but would
-    otherwise pass the plain extension check."""
     return path.suffix.lower() in AUDIO_EXTENSIONS and not path.name.startswith("._")
 
 
-def gather_files(sources: list[str], recursive: bool) -> list[Path]:
-    files: list[Path] = []
+def _iter_files_shuffled(root: Path, recursive: bool) -> Iterator[Path]:
+    with os.scandir(root) as it:
+        entries = list(it)
+    random.shuffle(entries)
+    subdirs = []
+    for entry in entries:
+        if entry.is_file():
+            yield Path(entry.path)
+        elif recursive and entry.is_dir():
+            subdirs.append(entry.path)
+    for subdir in subdirs:
+        yield from _iter_files_shuffled(Path(subdir), recursive)
+
+
+def gather_files(
+    sources: list[str], recursive: bool, sample_size: int | None = None
+) -> Iterator[Path]:
+    found = 0
     for source in sources:
         path = Path(source)
         if path.is_file():
             if _is_audio_file(path):
-                files.append(path)
+                yield path
+                found += 1
+                if sample_size is not None and found >= sample_size:
+                    return
             continue
         if not path.is_dir():
             logger.warning("Source not found: %s", path)
             continue
-        walker = path.rglob("*") if recursive else path.glob("*")
-        files.extend(p for p in walker if p.is_file() and _is_audio_file(p))
-    return sorted(files)
+        walker = (
+            _iter_files_shuffled(path, recursive)
+            if sample_size is not None
+            else (path.rglob("*") if recursive else path.glob("*"))
+        )
+        for p in walker:
+            if p.is_file() and _is_audio_file(p):
+                yield p
+                found += 1
+                if sample_size is not None and found >= sample_size:
+                    return
 
 
 def _default_state_dir(first_source: str) -> Path:
-    """Where to keep .avalon_state.json when --dest wasn't given. `sources`
-    for `analyze` may be individual files, not just folders, so this can't
-    just assume the first source itself is a directory."""
     path = Path(first_source).resolve()
     return path if path.is_dir() else path.parent
 
@@ -242,68 +235,92 @@ def _pipeline_options_from_args(args: argparse.Namespace) -> PipelineOptions:
         overwrite_description=args.overwrite_description,
         headline_tag=args.headline_tag,
         headline_fields=args.headline_format,
-        do_identify=args.identify,
-        force_reidentify=args.force_reidentify,
-        min_identify_confidence=args.min_identify_confidence,
         delete_original=args.delete_original,
         dry_run=getattr(args, "dry_run", False),
     )
 
 
-def _check_identify_credentials(args: argparse.Namespace) -> int | None:
-    """Returns an exit code if --identify was requested without the
-    required credentials configured, else None to tell the caller to
-    proceed. Shared by run_analyze/run_watch so this is checked once,
-    before either mode's per-file loop starts."""
-    if not args.identify:
-        return None
-    try:
-        identity_credentials.ensure_configured()
-    except identity_credentials.MissingCredentialsError as exc:
-        logger.error(str(exc))
-        return 1
-    return None
+def _process_parallel(
+    pipeline: Pipeline,
+    paths: Iterator[Path],
+    workers: int,
+    handle: Callable[[Path, ProcessResult], None],
+) -> None:
+    max_in_flight = workers * 2
+    with ProcessPoolExecutor(
+        max_workers=workers, initializer=init_worker, initargs=(pipeline.options,)
+    ) as executor:
+        in_flight: dict[Future, Path] = {}
+
+        def submit_next() -> bool:
+            path = next(paths, None)
+            if path is None:
+                return False
+            try:
+                planned = pipeline.plan(path)
+            except Exception as exc:
+                handle(
+                    path,
+                    ProcessResult(
+                        source_path=str(path),
+                        output_path=str(path),
+                        analyzed=False,
+                        converted=False,
+                        error=str(exc),
+                    ),
+                )
+                return True
+            in_flight[executor.submit(process_planned_in_worker, planned)] = path
+            return True
+
+        while len(in_flight) < max_in_flight and submit_next():
+            pass
+        while in_flight:
+            done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+            for future in done:
+                path = in_flight.pop(future)
+                handle(path, future.result())
+                submit_next()
 
 
 def run_analyze(args: argparse.Namespace) -> int:
-    if (exit_code := _check_identify_credentials(args)) is not None:
-        return exit_code
-
-    files = gather_files(args.sources, args.recursive)
-    if not files:
-        logger.warning("No audio files found")
-        return 0
-    logger.info("Found %d audio file(s)", len(files))
-
     options = _pipeline_options_from_args(args)
     pipeline = Pipeline(options)
     dest_root = options.dest_root or _default_state_dir(args.sources[0])
     state = state_module.load(dest_root)
+    skip_fast_path = args.dry_run or args.force_reanalyze
 
-    skip_fast_path = (
-        args.dry_run or args.identify or args.force_reanalyze or args.force_reidentify
-    )
+    def unprocessed() -> Iterator[Path]:
+        for path in gather_files(args.sources, args.recursive, sample_size=args.random):
+            if not skip_fast_path and state_module.is_unchanged(state, path):
+                logger.debug("Unchanged, skipping: %s", path)
+                continue
+            yield path
 
     failures: list[tuple[Path, str]] = []
     processed = 0
-    for path in files:
-        if not skip_fast_path and state_module.is_unchanged(state, path):
-            logger.debug("Unchanged, skipping: %s", path)
-            continue
-        result = pipeline.process_file(path)
+
+    def handle(path: Path, result: ProcessResult) -> None:
+        nonlocal processed
         if result.error:
             failures.append((path, result.error))
             logger.error("Failed: %s: %s", path, result.error)
-        else:
-            processed += 1
-            logger.info(
-                "%s%s -> %s",
-                "[dry-run] " if args.dry_run else "",
-                path,
-                result.output_path,
-            )
-            if not args.dry_run:
-                state_module.record(state, path)
+            return
+        processed += 1
+        logger.info(
+            "%s%s -> %s",
+            "[dry-run] " if args.dry_run else "",
+            path,
+            result.output_path,
+        )
+        if not args.dry_run:
+            state_module.record(state, path)
+
+    if args.workers > 1:
+        _process_parallel(pipeline, unprocessed(), args.workers, handle)
+    else:
+        for path in unprocessed():
+            handle(path, pipeline.process_file(path))
 
     if not args.dry_run:
         state_module.save(dest_root, state)
@@ -313,9 +330,6 @@ def run_analyze(args: argparse.Namespace) -> int:
 
 
 def run_watch(args: argparse.Namespace) -> int:
-    if (exit_code := _check_identify_credentials(args)) is not None:
-        return exit_code
-
     source_roots = [Path(s).resolve() for s in args.sources]
     missing = [s for s in source_roots if not s.is_dir()]
     if missing:
@@ -328,7 +342,7 @@ def run_watch(args: argparse.Namespace) -> int:
     dest_root = options.dest_root or source_roots[0]
     state = state_module.load(dest_root)
 
-    skip_fast_path = args.identify or args.force_reanalyze or args.force_reidentify
+    skip_fast_path = args.force_reanalyze
 
     def handle(path: Path) -> None:
         if not skip_fast_path and state_module.is_unchanged(state, path):
@@ -342,9 +356,8 @@ def run_watch(args: argparse.Namespace) -> int:
             state_module.save(dest_root, state)
 
     if not args.no_backfill:
-        backlog = gather_files([str(root) for root in source_roots], recursive=True)
-        logger.info("Backfilling %d existing file(s)", len(backlog))
-        for path in backlog:
+        logger.info("Backfilling existing files")
+        for path in gather_files([str(root) for root in source_roots], recursive=True):
             handle(path)
 
     watcher.watch(source_roots, handle, debounce_seconds=args.debounce_seconds)
@@ -385,19 +398,6 @@ def run_inspect(args: argparse.Namespace) -> int:
                         f"{label.name} ({label.confidence:.2f})" for label in labels
                     )
                 )
-
-    identity_fields = tag_writer.read_identity_fields(audio, file_format)
-    if identity_fields:
-        print("\nidentity fields (Picard-interop):")
-        for key, value in identity_fields.items():
-            print(f"  {key}: {value}")
-
-    identity_extended = tag_writer.read_identity_extended(audio, file_format)
-    print(f"\nidentity tag (raw): {identity_extended}")
-    if identity_extended:
-        print("identity tag (parsed):")
-        for key, value in identity_blob.decode_identity(identity_extended).items():
-            print(f"  {key}: {value}")
     return 0
 
 

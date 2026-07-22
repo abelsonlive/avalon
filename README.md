@@ -1,22 +1,30 @@
 # avalon
 
-Analyzes, tags, and organizes a music library: BPM/key extraction, mood/genre/energy
-descriptors via Essentia, ID3/Vorbis/MP4 tag normalization, cover art, format
-conversion, and optional MusicBrainz/Discogs lookups. Runs once over a folder or
-as a watching daemon.
+Analyzes, tags, and organizes a music library:
+- BPM/key extraction, mood/genre/energy descriptors via Essentia
+- ID3/Vorbis/MP4 tag normalization
+- cover art, format conversion
+
+Runs once over a folder or as a watching daemon. MusicBrainz/Discogs
+reconciliation is left to Picard.
 
 ## Requirements
 
 - Python 3.10–3.11 (see the `essentia-tensorflow` pin in `pyproject.toml` for why)
 - [uv](https://docs.astral.sh/uv/)
 - `ffmpeg` on `PATH` — `brew install ffmpeg` / `apt install ffmpeg`
-- `fpcalc`, only for `--identify` — `brew install chromaprint` / `apt install libchromaprint-tools`
 
 ## Install
 
 ```bash
 git clone <repository-url> && cd avalon
 uv sync
+```
+
+OR 
+
+```shell
+pip install avalon-audio
 ```
 
 First run downloads Essentia's models (~26.5MB) to `~/.cache/avalon/models/`.
@@ -37,8 +45,8 @@ uv run avalon analyze ~/Music/Downloads --dest ~/Music/Library \
 # watch continuously, -v so you can see it working (backfills on startup)
 uv run avalon watch ~/Music/Downloads --dest ~/Music/Library -v
 
-# also reconcile against MusicBrainz/Discogs
-uv run avalon analyze ~/Music/Downloads --dest ~/Music/Library --identify
+# backfill a large library faster with 8 concurrent worker processes
+uv run avalon analyze ~/Music/Downloads --recursive --dest ~/Music/Library --workers 8
 
 # see what's actually in a file's tags
 uv run avalon inspect ~/Music/Library/Artist/Album/01\ -\ Title.aiff
@@ -52,23 +60,25 @@ Full flag list: `avalon analyze --help` / `avalon watch --help`.
 flowchart TD
     src[source file]
     src --> analyze[essentia analysis]
-    src --> fp[acoustid fingerprint]
-    fp --> mb[musicbrainz]
-    fp --> discogs[discogs]
     src --> conv{convert?}
     conv -->|yes| ffmpeg
     conv -->|no| copy[copy in place]
     analyze --> write[write tags + art]
-    mb --> write
-    discogs --> write
     ffmpeg --> write
     copy --> write
     write --> out[output file]
 ```
 
-Analysis and identify both run against the original file, before any conversion.
-Canonical fields (title/artist/album/genre/bpm/key/date) only fill in when
-missing — nothing gets overwritten unless you pass `--force-reanalyze`.
+Analysis runs against the original file, before any conversion. Canonical
+fields (title/artist/album/genre/bpm/key) only fill in when missing —
+nothing gets overwritten unless you pass `--force-reanalyze`.
+
+`--workers N` runs analysis in N separate worker processes instead of one
+at a time — each has its own Essentia/TensorFlow session, so results never
+cross between files. Destination-path collisions (e.g. two files with
+missing tags both falling back to the same `Unknown Artist/Unknown Album`
+path) are still resolved from a single process before any work is handed
+to a worker, so numbering stays correct under `--workers` too.
 
 ## Tags
 
@@ -77,22 +87,8 @@ energy:0.71;genre:Techno`, in COMM/DESCRIPTION/desc, configurable via
 `--headline-tag`/`--headline-format`) and an extended tag with the full
 descriptor roster (`TXXX:AVALON_ANALYSIS` / a Vorbis field / an MP4 atom).
 
-`--identify` adds a third (`AVALON_IDENTITY`) plus individual MusicBrainz/
-Discogs/AcoustID/ISRC/label/catalog-number fields, written using Picard's own
-tag names — see `avalon/constants.py` for the exact frame/atom per format —
-so avalon-tagged files work with Picard, Navidrome, and anything else
-MusicBrainz-aware.
-
-## Identify setup
-
-Needs at least one of:
-
-- `ACOUSTID_API_KEY` — free at <https://acoustid.org/api-key>
-- `DISCOGS_TOKEN` — from your Discogs account's Developer settings
-
-`--identify` errors if neither is set. `--force-reidentify` redoes
-already-identified files; `--min-identify-confidence` (default `0.7`) is the
-minimum AcoustID score to trust.
+MusicBrainz/Discogs/AcoustID reconciliation isn't handled by avalon — run
+[Picard](https://picard.musicbrainz.org/) over the library separately for that.
 
 ## Development
 

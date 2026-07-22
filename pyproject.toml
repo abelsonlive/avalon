@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "avalon-audio"
-version = "0.0.1"
+version = "0.0.2"
 description = "Standalone audio analysis, tagging, and organization CLI"
 readme = "README.md"
 license = { text = "MIT" }
@@ -13,30 +13,12 @@ authors = [
 ]
 requires-python = ">=3.10,<3.12"
 dependencies = [
-    # essentia-tensorflow is a full replacement for `essentia` (same `essentia`
-    # import, plus the Tensorflow* algorithms) -- do not depend on both.
-    # Pinned to dev1110: the newest release with both a macOS arm64 wheel
-    # built for an old-enough deployment target (11.0) to run on this dev
-    # machine (macOS 13.4) *and* a linux x86_64 wheel in the same release.
-    # Newer releases (dev1177+) dropped linux wheels; dev1389+ raised the
-    # arm64 deployment target to macOS 15. Caps us at Python 3.11.
     "essentia-tensorflow==2.1b6.dev1110",
-    # dev1110 was compiled against NumPy 1.x's C API; NumPy 2.x breaks its
-    # ABI at import time (`_ARRAY_API not found`).
     "numpy<2",
     "ffmpeg-python>=0.2.0",
     "mutagen>=1.48.0",
     "watchdog>=6.0.0",
     "requests>=2.31.0",
-    # Phase 2 (optional --identify): fingerprinting + AcoustID lookup.
-    # Needs the `fpcalc` binary or libchromaprint on PATH/loadable at
-    # runtime (brew install chromaprint / apt install libchromaprint-tools)
-    # -- not a Python dependency, so not listed here.
-    "pyacoustid>=1.3.1",
-    # Phase 2 (optional --identify): Discogs release/label search. This is
-    # the actively maintained community fork (import name `discogs_client`)
-    # -- NOT the abandoned original `discogs-client` package.
-    "python3-discogs-client>=2.9",
 ]
 
 [project.optional-dependencies]
