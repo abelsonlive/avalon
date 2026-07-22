@@ -78,7 +78,7 @@ class ModelMeta:
 
 
 def _cache_dir() -> Path:
-    path = Path.home() / ".avalon-cache" / MODEL_CACHE_DIRNAME / "models"
+    path = Path.home() / ".cache" / MODEL_CACHE_DIRNAME / "models"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
