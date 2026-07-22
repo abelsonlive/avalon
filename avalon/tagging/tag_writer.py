@@ -171,6 +171,8 @@ def _write_mp4_generated(audio, values: dict[str, str]) -> None:
 
 
 def _headline_frame_id(file_format: FileFormat, tag_name: str) -> str:
+    if tag_name.lower() == "description":
+        tag_name = TAG_FRAME_MAPS[file_format].headline
     if file_format in ID3_FAMILY:
         return "COMM" if tag_name.upper() == "COMM" else f"TXXX:{tag_name}"
     if file_format is FileFormat.MP4:

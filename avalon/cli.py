@@ -134,9 +134,10 @@ def _add_pipeline_flags(parser: argparse.ArgumentParser) -> None:
         "--headline-tag",
         type=str,
         default=None,
-        help="Tag/field name to write the headline to (default: COMM for MP3/AIFF/WAV, "
-        "DESCRIPTION for FLAC, desc for MP4). A name other than the default becomes a "
-        "TXXX frame (ID3-family) or freeform atom (MP4) rather than the native comment field",
+        help="Tag/field name to write the headline to. 'description' (the default) always "
+        "resolves to the native description/comment field per format: COMM for MP3/AIFF/WAV, "
+        "DESCRIPTION for FLAC, desc for MP4. Any other name becomes a TXXX frame (ID3-family) "
+        "or freeform atom (MP4) rather than the native comment field",
     )
     parser.add_argument(
         "--headline-format",
