@@ -352,8 +352,12 @@ def run_watch(args: argparse.Namespace) -> int:
             logger.error("Failed: %s: %s", path, result.error)
         else:
             logger.info("%s -> %s", path, result.output_path)
-            state_module.record(state, path)
-            state_module.save(dest_root, state)
+            # --delete-original removes `path` as part of processing -- it
+            # can't recur at this location, so there's nothing to
+            # fingerprint (and doing so would crash on the now-missing file).
+            if path.exists():
+                state_module.record(state, path)
+                state_module.save(dest_root, state)
 
     if not args.no_backfill:
         logger.info("Backfilling existing files")
