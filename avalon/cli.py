@@ -19,6 +19,11 @@ from avalon import watcher
 
 logger = logging.getLogger(__name__)
 
+# How often `analyze` flushes its idempotency state to disk mid-run, so a
+# process-level crash (e.g. an essentia SIGSEGV) loses at most this many
+# files' worth of progress instead of the whole run.
+_STATE_SAVE_INTERVAL = 200
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -356,11 +361,23 @@ def run_analyze(args: argparse.Namespace) -> int:
         )
         if not args.dry_run:
             state_module.record(state, path)
+            # Persist incrementally, not just once at the end: essentia/TF can
+            # hard-crash (SIGSEGV) the whole process on a pathological file, and
+            # on a large unattended backfill that would otherwise throw away all
+            # progress and re-do everything on restart. Saving every
+            # STATE_SAVE_INTERVAL files bounds the re-work after a crash.
+            if processed % _STATE_SAVE_INTERVAL == 0:
+                state_module.save(dest_root, state)
 
     if args.workers > 1:
         _process_parallel(pipeline, unprocessed(), args.workers, handle)
     else:
         for path in unprocessed():
+            # Logged BEFORE processing (unlike the success line, which only
+            # prints after) so that if essentia/TF hard-crashes the process on
+            # this file, the last "Analyzing:" line in the log names the exact
+            # culprit -- an external restart wrapper can then quarantine it.
+            logger.info("Analyzing: %s", path)
             handle(path, pipeline.process_file(path))
 
     if not args.dry_run:

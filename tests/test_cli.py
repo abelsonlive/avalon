@@ -1,8 +1,12 @@
 import shutil
 from pathlib import Path
 
+import pytest
+
+import avalon.cli as cli
 from avalon.cli import _process_parallel, build_parser, gather_files, run_analyze
 from avalon.pipeline import Pipeline, PipelineOptions
+from avalon import state as state_module
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -136,6 +140,38 @@ class TestIgnoreErrorsExitCode:
 
     def test_failure_with_ignore_errors_exits_0(self, tmp_path):
         assert run_analyze(self._args_for(tmp_path, ignore_errors=True)) == 0
+
+
+class TestIncrementalStateSave:
+    def test_state_persists_before_a_mid_run_crash(self, tmp_path, monkeypatch):
+        for i in range(4):
+            shutil.copy2(FIXTURES / "test.m4a", tmp_path / f"t{i}.m4a")
+
+        # Save after every file so a crash on the 3rd leaves the first 2 on disk.
+        monkeypatch.setattr(cli, "_STATE_SAVE_INTERVAL", 1)
+
+        real_process = Pipeline.process_file
+        calls = {"n": 0}
+
+        def crashing_process(self, path):
+            calls["n"] += 1
+            if calls["n"] == 3:
+                # Stand in for an essentia/TF SIGSEGV: kills the run before the
+                # end-of-run state save would ever run.
+                raise SystemExit("simulated native crash")
+            return real_process(self, path)
+
+        monkeypatch.setattr(Pipeline, "process_file", crashing_process)
+
+        args = build_parser().parse_args(
+            ["analyze", str(tmp_path), "--no-analyze", "--no-convert"]
+        )
+        with pytest.raises(SystemExit):
+            run_analyze(args)
+
+        # Incremental saves persisted the 2 files completed before the crash,
+        # even though the end-of-run save never happened.
+        assert len(state_module.load(tmp_path)) == 2
 
 
 class TestProcessParallel:
