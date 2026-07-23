@@ -117,6 +117,77 @@ class TestForceReanalyze:
         assert result.analyzed is True
 
 
+class TestGenreWriting:
+    _THREE_GENRES = [Label("Techno", 0.9), Label("House", 0.8), Label("Ambient", 0.7)]
+
+    def _set_existing_genre(self, path: str, value: str) -> None:
+        fmt = tag_writer.detect_format(path)
+        audio = tag_writer.load(path, fmt)
+        tag_writer.write_generated_fields(
+            audio, fmt, bpm=None, key=None, genre=value, fill_only_if_missing=False
+        )
+        tag_writer.save(audio)
+
+    def _genre_on_disk(self, path: str) -> str | None:
+        fmt = tag_writer.detect_format(path)
+        return tag_writer.read_canonical(tag_writer.load(path, fmt), fmt).get("genre")
+
+    def test_overwrite_genre_writes_all_n_genres(self, tmp_path):
+        path = _copy_fixture("test.m4a", tmp_path)
+        self._set_existing_genre(path, "Old Genre")
+
+        pipeline = Pipeline(
+            PipelineOptions(
+                do_analyze=True,
+                do_convert=False,
+                force_reanalyze=True,
+                overwrite_genre=True,
+                n_genres=3,
+            )
+        )
+        pipeline._analyzer = FakeAnalyzer(_sample_analysis(genres=self._THREE_GENRES))
+
+        result = pipeline.process_file(path)
+        assert result.error is None
+        assert self._genre_on_disk(path) == "Techno; House; Ambient"
+
+    def test_n_genres_limits_how_many_are_written(self, tmp_path):
+        path = _copy_fixture("test.m4a", tmp_path)
+        self._set_existing_genre(path, "Old Genre")
+
+        pipeline = Pipeline(
+            PipelineOptions(
+                do_analyze=True,
+                do_convert=False,
+                force_reanalyze=True,
+                overwrite_genre=True,
+                n_genres=2,
+            )
+        )
+        pipeline._analyzer = FakeAnalyzer(_sample_analysis(genres=self._THREE_GENRES))
+
+        pipeline.process_file(path)
+        assert self._genre_on_disk(path) == "Techno; House"
+
+    def test_without_overwrite_genre_existing_is_kept(self, tmp_path):
+        path = _copy_fixture("test.m4a", tmp_path)
+        self._set_existing_genre(path, "Old Genre")
+
+        pipeline = Pipeline(
+            PipelineOptions(
+                do_analyze=True,
+                do_convert=False,
+                force_reanalyze=True,
+                overwrite_genre=False,
+                n_genres=3,
+            )
+        )
+        pipeline._analyzer = FakeAnalyzer(_sample_analysis(genres=self._THREE_GENRES))
+
+        pipeline.process_file(path)
+        assert self._genre_on_disk(path) == "Old Genre"
+
+
 class TestDryRun:
     def test_dry_run_does_not_write_anything(self, tmp_path):
         path = _copy_fixture("test.m4a", tmp_path)

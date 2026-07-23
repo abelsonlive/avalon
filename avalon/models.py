@@ -42,6 +42,15 @@ class TrackAnalysis:
     def top_genre(self) -> str | None:
         return self.genres[0].name if self.genres else None
 
+    def top_genres(self, n: int = 1) -> str | None:
+        """The top `n` predicted genres (confidence-ordered) joined by '; '
+        for a single multi-value genre tag, or None if no genres were
+        predicted. `n` is clamped to at least 1 and to however many genres
+        essentia actually returned."""
+        if not self.genres:
+            return None
+        return "; ".join(label.name for label in self.genres[: max(1, n)])
+
 
 @dataclass(slots=True)
 class ProcessResult:

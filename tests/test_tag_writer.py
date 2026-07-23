@@ -86,6 +86,84 @@ class TestReadWriteRoundTrip:
         )
 
 
+class TestGenreOverwrite:
+    def _set_genre(self, path: str, fmt, value: str) -> None:
+        audio = tag_writer.load(path, fmt)
+        tag_writer.write_generated_fields(
+            audio, fmt, bpm=None, key=None, genre=value, fill_only_if_missing=False
+        )
+        tag_writer.save(audio)
+
+    def test_overwrite_genre_replaces_existing(self, fixture_path):
+        fmt = tag_writer.detect_format(fixture_path)
+        self._set_genre(fixture_path, fmt, "Old Genre")
+
+        audio = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_generated_fields(
+            audio,
+            fmt,
+            bpm=None,
+            key=None,
+            genre="Techno; House; Ambient",
+            fill_only_if_missing=True,
+            overwrite_genre=True,
+        )
+        tag_writer.save(audio)
+
+        after = tag_writer.read_canonical(tag_writer.load(fixture_path, fmt), fmt)
+        assert after["genre"] == "Techno; House; Ambient"
+
+    def test_without_overwrite_genre_preserves_existing(self, fixture_path):
+        fmt = tag_writer.detect_format(fixture_path)
+        self._set_genre(fixture_path, fmt, "Old Genre")
+
+        audio = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_generated_fields(
+            audio,
+            fmt,
+            bpm=None,
+            key=None,
+            genre="Techno; House; Ambient",
+            fill_only_if_missing=True,
+            overwrite_genre=False,
+        )
+        tag_writer.save(audio)
+
+        after = tag_writer.read_canonical(tag_writer.load(fixture_path, fmt), fmt)
+        assert after["genre"] == "Old Genre"
+
+    def test_overwrite_genre_does_not_touch_existing_bpm_or_key(self, fixture_path):
+        fmt = tag_writer.detect_format(fixture_path)
+        audio = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_generated_fields(
+            audio,
+            fmt,
+            bpm="120",
+            key="5A",
+            genre="Old Genre",
+            fill_only_if_missing=False,
+        )
+        tag_writer.save(audio)
+
+        audio = tag_writer.load(fixture_path, fmt)
+        tag_writer.write_generated_fields(
+            audio,
+            fmt,
+            bpm="200",
+            key="9B",
+            genre="Techno; House",
+            fill_only_if_missing=True,
+            overwrite_genre=True,
+        )
+        tag_writer.save(audio)
+
+        after = tag_writer.read_canonical(tag_writer.load(fixture_path, fmt), fmt)
+        # genre replaced, but bpm/key stay fill-only-if-missing (unchanged)
+        assert after["genre"] == "Techno; House"
+        assert after["bpm"] == "120"
+        assert after["key"] == "5A"
+
+
 class TestHeadlineTagOverride:
     _NATIVE_NAME = {"mp3": "COMM", "aiff": "COMM", "flac": "DESCRIPTION", "mp4": "desc"}
 

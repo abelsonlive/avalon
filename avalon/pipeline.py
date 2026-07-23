@@ -26,10 +26,13 @@ class PipelineOptions:
     force_reanalyze: bool = False
     overwrite: bool = False
     overwrite_description: bool = False
+    overwrite_genre: bool = False
+    n_genres: int = 1
     headline_tag: str | None = None
     headline_fields: tuple[str, ...] = analysis_blob.DEFAULT_HEADLINE_FIELDS
     delete_original: bool = False
     dry_run: bool = False
+    ignore_errors: bool = False
 
 
 @dataclass
@@ -157,8 +160,9 @@ class Pipeline:
                 output_format,
                 bpm=str(round(analysis.bpm)),
                 key=analysis_blob.standard_key(analysis),
-                genre=analysis.top_genre,
+                genre=analysis.top_genres(opts.n_genres),
                 fill_only_if_missing=True,
+                overwrite_genre=opts.overwrite_genre,
             )
             existing_headline = (
                 None

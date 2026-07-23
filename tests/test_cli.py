@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 
-from avalon.cli import _process_parallel, build_parser, gather_files
+from avalon.cli import _process_parallel, build_parser, gather_files, run_analyze
 from avalon.pipeline import Pipeline, PipelineOptions
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -88,6 +88,54 @@ class TestWorkersFlag:
         parser = build_parser()
         args = parser.parse_args(["analyze", "somefile.mp3", "--workers", "4"])
         assert args.workers == 4
+
+
+class TestNewPipelineFlagDefaults:
+    def test_defaults(self):
+        args = build_parser().parse_args(["analyze", "somefile.mp3"])
+        assert args.overwrite_genre is False
+        assert args.n_genres == 1
+        assert args.ignore_errors is False
+
+    def test_parses_explicit_values(self):
+        args = build_parser().parse_args(
+            [
+                "analyze",
+                "somefile.mp3",
+                "--overwrite-genre",
+                "--n-genres",
+                "3",
+                "--ignore-errors",
+            ]
+        )
+        assert args.overwrite_genre is True
+        assert args.n_genres == 3
+        assert args.ignore_errors is True
+
+    def test_watch_also_accepts_them(self):
+        args = build_parser().parse_args(
+            ["watch", "somedir", "--overwrite-genre", "--n-genres", "2"]
+        )
+        assert args.overwrite_genre is True
+        assert args.n_genres == 2
+
+
+class TestIgnoreErrorsExitCode:
+    def _args_for(self, tmp_path, *, ignore_errors: bool):
+        # A file with an audio extension but garbage content: gather_files
+        # picks it up (by extension), but the pipeline fails to read its
+        # tags -> a recorded per-file failure, without needing essentia.
+        (tmp_path / "corrupt.mp3").write_bytes(b"\x00not a real audio file\x00")
+        argv = ["analyze", str(tmp_path), "--no-analyze"]
+        if ignore_errors:
+            argv.append("--ignore-errors")
+        return build_parser().parse_args(argv)
+
+    def test_failure_without_ignore_errors_exits_2(self, tmp_path):
+        assert run_analyze(self._args_for(tmp_path, ignore_errors=False)) == 2
+
+    def test_failure_with_ignore_errors_exits_0(self, tmp_path):
+        assert run_analyze(self._args_for(tmp_path, ignore_errors=True)) == 0
 
 
 class TestProcessParallel:

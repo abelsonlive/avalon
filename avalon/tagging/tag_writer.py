@@ -118,6 +118,7 @@ def write_generated_fields(
     key: str | None,
     genre: str | None,
     fill_only_if_missing: bool,
+    overwrite_genre: bool = False,
 ) -> None:
     existing = read_canonical(audio, file_format)
     to_write = {}
@@ -127,7 +128,14 @@ def write_generated_fields(
         existing_value = existing.get(field)
         if field == "bpm" and existing_value == "0":
             existing_value = None
-        if fill_only_if_missing and existing_value:
+        # `overwrite_genre` lets the genre tag be replaced even when one is
+        # already present, independently of bpm/key (which stay fill-only-
+        # if-missing) -- essentia's genre prediction is the one field a user
+        # may deliberately want to clobber existing (often wrong) tags with.
+        skip_when_present = fill_only_if_missing and not (
+            field == "genre" and overwrite_genre
+        )
+        if skip_when_present and existing_value:
             continue
         to_write[field] = value
     if not to_write:

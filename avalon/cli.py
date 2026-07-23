@@ -131,6 +131,29 @@ def _add_pipeline_flags(parser: argparse.ArgumentParser) -> None:
         help="Replace the headline tag instead of merging into it",
     )
     parser.add_argument(
+        "--overwrite-genre",
+        action="store_true",
+        help="Overwrite the existing genre tag with essentia's predicted "
+        "genre(s). By default genre is only written when the file has none; "
+        "bpm/key stay fill-only-if-missing regardless of this flag.",
+    )
+    parser.add_argument(
+        "--n-genres",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Number of top essentia genres (confidence-ordered) to write to "
+        "the genre tag, joined by '; ' (default: 1). Capped by however many "
+        "genres essentia actually predicts.",
+    )
+    parser.add_argument(
+        "--ignore-errors",
+        action="store_true",
+        help="Keep going past per-file failures and exit 0 even if some files "
+        "failed, so a long unattended backfill runs to completion instead of "
+        "aborting; failures are still logged.",
+    )
+    parser.add_argument(
         "--headline-tag",
         type=str,
         default=None,
@@ -234,10 +257,13 @@ def _pipeline_options_from_args(args: argparse.Namespace) -> PipelineOptions:
         force_reanalyze=args.force_reanalyze,
         overwrite=args.overwrite,
         overwrite_description=args.overwrite_description,
+        overwrite_genre=args.overwrite_genre,
+        n_genres=args.n_genres,
         headline_tag=args.headline_tag,
         headline_fields=args.headline_format,
         delete_original=args.delete_original,
         dry_run=getattr(args, "dry_run", False),
+        ignore_errors=args.ignore_errors,
     )
 
 
@@ -280,7 +306,21 @@ def _process_parallel(
             done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
             for future in done:
                 path = in_flight.pop(future)
-                handle(path, future.result())
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    # A worker that died mid-file (e.g. an essentia/TF crash
+                    # surfacing as BrokenProcessPool) would otherwise raise
+                    # here and abort the whole batch -- turn it into a normal
+                    # per-file failure so the rest of the run continues.
+                    result = ProcessResult(
+                        source_path=str(path),
+                        output_path=str(path),
+                        analyzed=False,
+                        converted=False,
+                        error=str(exc),
+                    )
+                handle(path, result)
                 submit_next()
 
 
@@ -327,6 +367,11 @@ def run_analyze(args: argparse.Namespace) -> int:
         state_module.save(dest_root, state)
 
     logger.info("Processed %d file(s), %d failure(s)", processed, len(failures))
+    if failures and args.ignore_errors:
+        logger.warning(
+            "Ignoring %d failure(s) (--ignore-errors); exiting 0", len(failures)
+        )
+        return 0
     return 0 if not failures else 2
 
 
