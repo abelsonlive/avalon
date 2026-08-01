@@ -61,5 +61,17 @@ def is_unchanged(state: dict[str, Any], path: Path) -> bool:
     return recorded == fingerprint(path)
 
 
-def record(state: dict[str, Any], path: Path) -> None:
-    state[str(path.resolve())] = fingerprint(path)
+def record(state: dict[str, Any], path: Path) -> bool:
+    """Fingerprint `path` into `state`; returns whether it recorded anything.
+
+    A missing file is a no-op rather than an error: with --delete-original
+    the source is removed as part of processing, so by the time a caller
+    records the success there is nothing left to stat. Callers used to have
+    to remember that themselves, and the one that forgot (`analyze`) died
+    with FileNotFoundError on its first successful file.
+    """
+    try:
+        state[str(path.resolve())] = fingerprint(path)
+    except OSError:
+        return False
+    return True

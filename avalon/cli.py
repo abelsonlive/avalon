@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from pathlib import Path
 
-from avalon.constants import AUDIO_EXTENSIONS
+from avalon.constants import is_audio_file
 from avalon.models import ProcessResult
 from avalon.pathing import DEFAULT_TEMPLATE
 from avalon.pipeline import Pipeline, PipelineOptions, init_worker, process_planned_in_worker
@@ -91,6 +91,17 @@ def _add_watch_parser(subparsers) -> argparse.ArgumentParser:
         action="store_true",
         help="Skip processing pre-existing files on startup",
     )
+    parser.add_argument(
+        "--rescan-seconds",
+        type=int,
+        default=watcher.DEFAULT_RESCAN_SECONDS,
+        metavar="N",
+        help="How often to re-walk the watched folders for files that produced "
+        "no filesystem event (default: %(default)s, 0 disables). Recursive "
+        "inotify watches can miss a directory that is created and filled "
+        "faster than its watch descriptor is added -- without this sweep those "
+        "files are stranded silently until the daemon restarts",
+    )
     parser.set_defaults(func=run_watch)
     return parser
 
@@ -105,6 +116,16 @@ def _headline_fields_type(raw: str) -> tuple[str, ...]:
 def _add_pipeline_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--dest", type=str, default=None, help="Destination root; omit to tag in place"
+    )
+    parser.add_argument(
+        "--state-dir",
+        type=str,
+        default=None,
+        help=f"Folder holding the {state_module.STATE_FILENAME} idempotency file. "
+        "Defaults to --dest for `analyze` and to the first watched folder for "
+        "`watch`. Two runs pointed at the same state file will clobber each "
+        "other's entries, since each rewrites the whole file from its own "
+        "in-memory copy -- give concurrent runs separate state dirs",
     )
     parser.add_argument("--path-template", type=str, default=DEFAULT_TEMPLATE)
     parser.add_argument(
@@ -198,10 +219,6 @@ def setup_logging(debug: bool, verbose: bool) -> None:
     logging.getLogger("urllib3").setLevel(logging.INFO)
 
 
-def _is_audio_file(path: Path) -> bool:
-    return path.suffix.lower() in AUDIO_EXTENSIONS and not path.name.startswith("._")
-
-
 def _iter_files_shuffled(root: Path, recursive: bool) -> Iterator[Path]:
     with os.scandir(root) as it:
         entries = list(it)
@@ -223,7 +240,7 @@ def gather_files(
     for source in sources:
         path = Path(source)
         if path.is_file():
-            if _is_audio_file(path):
+            if is_audio_file(path):
                 yield path
                 found += 1
                 if sample_size is not None and found >= sample_size:
@@ -238,7 +255,7 @@ def gather_files(
             else (path.rglob("*") if recursive else path.glob("*"))
         )
         for p in walker:
-            if p.is_file() and _is_audio_file(p):
+            if p.is_file() and is_audio_file(p):
                 yield p
                 found += 1
                 if sample_size is not None and found >= sample_size:
@@ -332,8 +349,10 @@ def _process_parallel(
 def run_analyze(args: argparse.Namespace) -> int:
     options = _pipeline_options_from_args(args)
     pipeline = Pipeline(options)
-    dest_root = options.dest_root or _default_state_dir(args.sources[0])
-    state = state_module.load(dest_root)
+    state_dir = Path(args.state_dir) if args.state_dir else (
+        options.dest_root or _default_state_dir(args.sources[0])
+    )
+    state = state_module.load(state_dir)
     skip_fast_path = args.dry_run or args.force_reanalyze
 
     def unprocessed() -> Iterator[Path]:
@@ -367,7 +386,7 @@ def run_analyze(args: argparse.Namespace) -> int:
             # progress and re-do everything on restart. Saving every
             # STATE_SAVE_INTERVAL files bounds the re-work after a crash.
             if processed % _STATE_SAVE_INTERVAL == 0:
-                state_module.save(dest_root, state)
+                state_module.save(state_dir, state)
 
     if args.workers > 1:
         _process_parallel(pipeline, unprocessed(), args.workers, handle)
@@ -381,7 +400,7 @@ def run_analyze(args: argparse.Namespace) -> int:
             handle(path, pipeline.process_file(path))
 
     if not args.dry_run:
-        state_module.save(dest_root, state)
+        state_module.save(state_dir, state)
 
     logger.info("Processed %d file(s), %d failure(s)", processed, len(failures))
     if failures and args.ignore_errors:
@@ -402,8 +421,13 @@ def run_watch(args: argparse.Namespace) -> int:
 
     options = _pipeline_options_from_args(args)
     pipeline = Pipeline(options)
-    dest_root = options.dest_root or source_roots[0]
-    state = state_module.load(dest_root)
+    # Deliberately NOT --dest: state keys are source paths, so a watcher's
+    # entries and those of an `analyze` run over the destination library are
+    # disjoint sets that share nothing but the filename. Pointing both at
+    # --dest just makes them overwrite each other (each save() rewrites the
+    # whole file from its own in-memory copy) and fight over ownership.
+    state_dir = Path(args.state_dir) if args.state_dir else source_roots[0]
+    state = state_module.load(state_dir)
 
     skip_fast_path = args.force_reanalyze
 
@@ -415,19 +439,22 @@ def run_watch(args: argparse.Namespace) -> int:
             logger.error("Failed: %s: %s", path, result.error)
         else:
             logger.info("%s -> %s", path, result.output_path)
-            # --delete-original removes `path` as part of processing -- it
-            # can't recur at this location, so there's nothing to
-            # fingerprint (and doing so would crash on the now-missing file).
-            if path.exists():
-                state_module.record(state, path)
-                state_module.save(dest_root, state)
+            # Nothing to persist when --delete-original already removed the
+            # source: it can't recur at this location, so skip the write
+            # rather than rewriting the whole state file for no change.
+            if state_module.record(state, path):
+                state_module.save(state_dir, state)
 
-    if not args.no_backfill:
-        logger.info("Backfilling existing files")
-        for path in gather_files([str(root) for root in source_roots], recursive=True):
-            handle(path)
-
-    watcher.watch(source_roots, handle, debounce_seconds=args.debounce_seconds)
+    # The startup backfill is the watcher's initial scan rather than a loop
+    # here, so the observer is already running while it happens -- a file
+    # arriving mid-backfill used to fall into the gap between the two.
+    watcher.watch(
+        source_roots,
+        handle,
+        debounce_seconds=args.debounce_seconds,
+        rescan_seconds=args.rescan_seconds,
+        initial_scan=not args.no_backfill,
+    )
     return 0
 
 

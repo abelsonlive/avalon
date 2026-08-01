@@ -42,7 +42,8 @@ uv run avalon analyze ~/Music/Downloads --recursive --dest ~/Music/Library
 uv run avalon analyze ~/Music/Downloads --dest ~/Music/Library \
     --convert-lossless-to aiff --max-bit-depth 16 --max-sample-rate 48000
 
-# watch continuously, -v so you can see it working (backfills on startup)
+# watch continuously, -v so you can see it working (scans on startup, then
+# re-scans every --rescan-seconds to catch anything the OS didn't report)
 uv run avalon watch ~/Music/Downloads --dest ~/Music/Library -v
 
 # backfill a large library faster with 8 concurrent worker processes
@@ -79,6 +80,26 @@ cross between files. Destination-path collisions (e.g. two files with
 missing tags both falling back to the same `Unknown Artist/Unknown Album`
 path) are still resolved from a single process before any work is handed
 to a worker, so numbering stays correct under `--workers` too.
+
+### Watch mode
+
+`watch` notices files two ways, and needs both. Filesystem events give it
+low latency; a full rescan every `--rescan-seconds` (default 300) gives it
+correctness. The rescan is not redundant — a recursive watch is really one
+watch descriptor per subdirectory, added only after the observer sees the
+parent appear, so a folder created and filled faster than that (dragging an
+album in, an rsync, an unzip) can have its contents land before anything is
+watching them. Those files produce no event at all, and event-driven-only
+watching strands them silently and forever. Set `--rescan-seconds 0` to turn
+the sweep off.
+
+Both commands keep a `.avalon_state.json` fingerprint index so re-runs skip
+files that haven't changed. It lives in `--dest` for `analyze` and in the
+first watched folder for `watch` — the two track different key sets (source
+paths under the watched folder vs. under the library), and each save
+rewrites the whole file from that process's in-memory copy, so two runs
+sharing one state file will erase each other's entries. Use `--state-dir` if
+you need to place it explicitly.
 
 ## Tags
 

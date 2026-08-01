@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Final
 
 AUDIO_EXTENSIONS: Final[set[str]] = {
@@ -13,6 +14,22 @@ AUDIO_EXTENSIONS: Final[set[str]] = {
     ".mp4",
     ".wav",
 }
+
+
+def is_audio_file(path: Path) -> bool:
+    """Whether we should try to process `path`, by name alone.
+
+    The `._` exclusion is not cosmetic: macOS splits a file's xattrs and
+    resource fork into an AppleDouble sidecar named `._<original>` whenever
+    it's copied to a filesystem that can't store them natively (SMB, exFAT).
+    Those sidecars keep the audio extension but hold AppleDouble data (magic
+    `00 05 16 07`), so anything that filters on extension alone hands them to
+    mutagen and gets "not a valid FLAC file" / "Invalid chunk ID" per file.
+
+    Lives here rather than in `cli` so `watcher` can share it without
+    depending on the CLI layer.
+    """
+    return path.suffix.lower() in AUDIO_EXTENSIONS and not path.name.startswith("._")
 
 ANALYSIS_SCHEMA_VERSION: Final[int] = 1
 

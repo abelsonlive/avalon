@@ -7,6 +7,7 @@ import avalon.cli as cli
 from avalon.cli import _process_parallel, build_parser, gather_files, run_analyze
 from avalon.pipeline import Pipeline, PipelineOptions
 from avalon import state as state_module
+from avalon import watcher
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -172,6 +173,116 @@ class TestIncrementalStateSave:
         # Incremental saves persisted the 2 files completed before the crash,
         # even though the end-of-run save never happened.
         assert len(state_module.load(tmp_path)) == 2
+
+
+class TestAnalyzeWithDeleteOriginal:
+    """`analyze --delete-original` used to die with FileNotFoundError trying
+    to fingerprint the source it had just deleted -- on the *first* successful
+    file, so a sweep of an album processed exactly one track. --ignore-errors
+    did not help: the exception came from the result handler, not the
+    pipeline, so it escaped the per-file failure path entirely."""
+
+    def _args(self, tmp_path, count):
+        for i in range(count):
+            shutil.copy2(FIXTURES / "test.m4a", tmp_path / f"t{i}.m4a")
+        # --overwrite because the fixtures share tags and so share one
+        # templated destination path; the point here is the source side.
+        return build_parser().parse_args(
+            [
+                "analyze",
+                str(tmp_path),
+                "--dest",
+                str(tmp_path / "library"),
+                "--no-analyze",
+                "--no-convert",
+                "--delete-original",
+                "--overwrite",
+            ]
+        )
+
+    def test_processes_every_file_not_just_the_first(self, tmp_path):
+        assert run_analyze(self._args(tmp_path, 3)) == 0
+        # Every source consumed => the run got past the first file.
+        assert list(tmp_path.glob("*.m4a")) == []
+
+    def test_deleted_sources_are_not_recorded_in_state(self, tmp_path):
+        run_analyze(self._args(tmp_path, 2))
+        # Nothing to fingerprint once the source is gone, so state stays empty
+        # rather than holding entries for paths that can never be revisited.
+        assert state_module.load(tmp_path / "library") == {}
+
+
+class TestWatchStateFile:
+    """Watch mode keys state by *source* path, so its entries and those of an
+    `analyze` run over the destination library are disjoint sets. Sharing one
+    file just meant each save() -- a whole-file rewrite from an in-memory
+    copy -- clobbered the other's entries, and left it owned by whichever
+    process ran as root."""
+
+    def _run(self, tmp_path, monkeypatch, extra_argv):
+        source = tmp_path / "downloads"
+        dest = tmp_path / "library"
+        source.mkdir()
+        dest.mkdir()
+        loaded: list[Path] = []
+        monkeypatch.setattr(
+            cli.state_module, "load", lambda d: loaded.append(Path(d)) or {}
+        )
+        monkeypatch.setattr(cli.watcher, "watch", lambda *a, **k: None)
+        argv = ["watch", str(source), "--dest", str(dest), *extra_argv]
+        cli.run_watch(build_parser().parse_args(argv))
+        return source, dest, loaded
+
+    def test_defaults_to_the_watched_folder_not_dest(self, tmp_path, monkeypatch):
+        source, dest, loaded = self._run(tmp_path, monkeypatch, [])
+        assert loaded == [source.resolve()]
+        assert dest.resolve() not in loaded
+
+    def test_state_dir_flag_overrides(self, tmp_path, monkeypatch):
+        elsewhere = tmp_path / "state"
+        elsewhere.mkdir()
+        _, _, loaded = self._run(
+            tmp_path, monkeypatch, ["--state-dir", str(elsewhere)]
+        )
+        assert loaded == [elsewhere]
+
+    def test_analyze_still_defaults_to_dest(self, tmp_path, monkeypatch):
+        source = tmp_path / "downloads"
+        dest = tmp_path / "library"
+        source.mkdir()
+        dest.mkdir()
+        loaded: list[Path] = []
+        monkeypatch.setattr(
+            cli.state_module, "load", lambda d: loaded.append(Path(d)) or {}
+        )
+        args = build_parser().parse_args(
+            ["analyze", str(source), "--dest", str(dest), "--dry-run"]
+        )
+        run_analyze(args)
+        assert loaded == [dest]
+
+
+class TestRescanFlag:
+    def test_defaults_to_the_watcher_default(self):
+        args = build_parser().parse_args(["watch", "somedir"])
+        assert args.rescan_seconds == watcher.DEFAULT_RESCAN_SECONDS
+
+    def test_can_be_disabled(self):
+        args = build_parser().parse_args(["watch", "somedir", "--rescan-seconds", "0"])
+        assert args.rescan_seconds == 0
+
+    def test_is_passed_through_to_the_watcher(self, tmp_path, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(cli.state_module, "load", lambda d: {})
+        monkeypatch.setattr(
+            cli.watcher, "watch", lambda *a, **kw: captured.update(kw)
+        )
+        args = build_parser().parse_args(
+            ["watch", str(tmp_path), "--rescan-seconds", "42", "--no-backfill"]
+        )
+        cli.run_watch(args)
+        assert captured["rescan_seconds"] == 42
+        assert captured["initial_scan"] is False
 
 
 class TestProcessParallel:
